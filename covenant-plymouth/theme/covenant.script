@@ -1,0 +1,131 @@
+# -----------------------------------------------------------------------
+# Covenant CachyOS Plymouth Theme — Animação shimmer 10 frames
+# -----------------------------------------------------------------------
+
+Window.SetBackgroundTopColor(0.027, 0.051, 0.094);
+Window.SetBackgroundBottomColor(0.027, 0.051, 0.094);
+
+screen_width  = Window.GetWidth();
+screen_height = Window.GetHeight();
+cx = screen_width  / 2;
+cy = screen_height / 2;
+
+# Escala baseada na resolução
+scale = screen_height / 1080.0;
+if (scale > 1.5) scale = 1.5;
+if (scale < 0.5) scale = 0.5;
+
+logo_size = Math.Int(200 * scale);
+
+# -----------------------------------------------------------------------
+# Carrega os 10 frames da animação
+# -----------------------------------------------------------------------
+TOTAL_FRAMES = 10;
+frame_images = [];
+
+for (i = 0; i < TOTAL_FRAMES; i++) {
+    img = Image(String.Format("logo_{0:03}.png", i));
+    frame_images[i] = img.Scale(logo_size, logo_size);
+}
+
+logo_sprite = Sprite(frame_images[0]);
+logo_sprite.SetX(cx - logo_size / 2);
+logo_sprite.SetY(cy - logo_size / 2 - Math.Int(30 * scale));
+logo_sprite.SetOpacity(1.0);
+
+# -----------------------------------------------------------------------
+# Texto COVENANT
+# -----------------------------------------------------------------------
+text_r = 0.290; text_g = 0.561; text_b = 0.941;
+font_size = Math.Int(14 * scale);
+
+title_image = Image.Text("COVENANT  CACHYOS", text_r, text_g, text_b, 1.0,
+    String.Format("Monospace Bold {0}", font_size));
+title_sprite = Sprite(title_image);
+title_sprite.SetX(cx - title_image.GetWidth() / 2);
+title_sprite.SetY(cy + logo_size / 2 - Math.Int(20 * scale));
+title_sprite.SetOpacity(0.9);
+
+# -----------------------------------------------------------------------
+# Barra de progresso
+# -----------------------------------------------------------------------
+bar_w = Math.Int(180 * scale);
+bar_h = Math.Int(2   * scale);
+if (bar_h < 1) bar_h = 1;
+bar_x = cx - bar_w / 2;
+bar_y = cy + logo_size / 2 + Math.Int(16 * scale);
+
+bar_bg = Image(bar_w, bar_h);
+bar_bg_sprite = Sprite(bar_bg);
+bar_bg_sprite.SetX(bar_x);
+bar_bg_sprite.SetY(bar_y);
+bar_bg_sprite.SetOpacity(0.15);
+
+progress_sprite = Sprite(Image(1, bar_h));
+progress_sprite.SetX(bar_x);
+progress_sprite.SetY(bar_y);
+progress_sprite.SetOpacity(0.85);
+
+# -----------------------------------------------------------------------
+# Mensagem de status
+# -----------------------------------------------------------------------
+status_sprite = Sprite();
+status_y = bar_y + Math.Int(16 * scale);
+
+fun UpdateStatus(text) {
+    if (text != "") {
+        msg = Image.Text(text, 0.35, 0.52, 0.72, 1.0,
+            String.Format("Monospace {0}", Math.Int(10 * scale)));
+        status_sprite.SetImage(msg);
+        status_sprite.SetX(cx - msg.GetWidth() / 2);
+        status_sprite.SetY(status_y);
+        status_sprite.SetOpacity(0.65);
+    }
+}
+
+# -----------------------------------------------------------------------
+# Loop de animação
+# -----------------------------------------------------------------------
+current_frame  = 0;
+tick           = 0;
+TICKS_PER_FRAME = 3;   # velocidade: menor = mais rápido
+
+fun refresh_callback() {
+    tick = tick + 1;
+    if (tick >= TICKS_PER_FRAME) {
+        tick = 0;
+        current_frame = (current_frame + 1) % TOTAL_FRAMES;
+        logo_sprite.SetImage(frame_images[current_frame]);
+    }
+}
+
+Plymouth.SetRefreshFunction(refresh_callback);
+
+# -----------------------------------------------------------------------
+# Callbacks Plymouth
+# -----------------------------------------------------------------------
+fun display_normal_callback() {
+    UpdateStatus("");
+}
+
+fun display_message_callback(text) {
+    UpdateStatus(text);
+}
+
+fun display_password_callback(prompt, bullets) {
+    dots = "";
+    for (i = 0; i < bullets; i++) { dots = dots + "● "; }
+    UpdateStatus(prompt + "  " + dots);
+}
+
+fun progress_callback(duration, progress) {
+    new_w = Math.Int(bar_w * progress);
+    if (new_w < 1) new_w = 1;
+    prog_img = Image(new_w, bar_h);
+    progress_sprite.SetImage(prog_img);
+}
+
+Plymouth.SetDisplayNormalFunction(display_normal_callback);
+Plymouth.SetMessageFunction(display_message_callback);
+Plymouth.SetDisplayPasswordFunction(display_password_callback);
+Plymouth.SetBootProgressFunction(progress_callback);

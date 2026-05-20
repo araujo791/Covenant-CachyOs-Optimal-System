@@ -1,0 +1,8 @@
+[Plymouth Theme]
+Name=Covenant CachyOS
+Description=Covenant CachyOS Boot Theme — shimmer animado sobre escudo digital
+ModuleName=script
+
+[script]
+ImageDir=/usr/share/plymouth/themes/covenant
+ScriptFile=/usr/share/plymouth/themes/covenant/covenant.script
