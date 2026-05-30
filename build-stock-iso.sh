@@ -560,27 +560,77 @@ RESOLVED
 systemctl enable systemd-resolved.service 2>/dev/null || true
 
 # ---------------------------------------------------------------------------
-# 12. CPU governor — intel_cpufreq (Xeon E5-2680v4)
-#     Loop em todos os cores via tmpfiles (aplicado no boot antes do login)
+# 12. CPU governor — performance via serviço de primeiro boot
+#
+#     NÃO usamos tmpfiles.d gerado aqui porque nproc retornaria os cores da
+#     máquina de BUILD, não do sistema instalado.
+#
+#     Solução: serviço one-shot que roda na primeira inicialização do sistema
+#     instalado, detecta os CPUs reais e grava o tmpfiles.d correto.
+#     O serviço se auto-desabilita após execução (ConditionPathExists).
 # ---------------------------------------------------------------------------
-echo "  -> Configurando CPU governor (intel_cpufreq)..."
+echo "  -> Configurando CPU governor (serviço de primeiro boot)..."
 
-# Gera tmpfiles.d dinamicamente com base no número real de CPUs do sistema alvo
-CPU_COUNT=$(nproc 2>/dev/null || echo 4)
+mkdir -p /etc/systemd/system /usr/local/bin /etc/udev/rules.d
+
+# Script executado no primeiro boot do sistema instalado
+cat > /usr/local/bin/covenant-cpu-governor-setup.sh << 'CPUSCRIPT'
+#!/bin/bash
+# Covenant CachyOS — CPU governor setup (primeiro boot)
+CPU_COUNT=$(nproc 2>/dev/null \
+    || ls -d /sys/devices/system/cpu/cpu[0-9]* 2>/dev/null | wc -l \
+    || echo 4)
+
+mkdir -p /etc/tmpfiles.d
 {
-    echo "# Covenant — cpu governor: performance (gerado dinamicamente para ${CPU_COUNT} cores)"
+    echo "# Covenant — cpu governor: performance"
+    echo "# Gerado no primeiro boot para ${CPU_COUNT} cores"
     for i in $(seq 0 $(( CPU_COUNT - 1 ))); do
         printf 'w! /sys/devices/system/cpu/cpu%d/cpufreq/scaling_governor - - - - performance\n' "$i"
     done
 } > /etc/tmpfiles.d/cpu-governor.conf
 
-# Também via udev como fallback
+# Aplica imediatamente sem precisar reiniciar
+systemd-tmpfiles --create /etc/tmpfiles.d/cpu-governor.conf 2>/dev/null || true
+
+CURRENT=$(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor 2>/dev/null || echo "n/a")
+echo "covenant-cpu-governor: ${CPU_COUNT} cores configurados — governor atual: ${CURRENT}"
+
+systemctl disable covenant-cpu-governor-setup.service 2>/dev/null || true
+CPUSCRIPT
+
+chmod +x /usr/local/bin/covenant-cpu-governor-setup.sh
+
+# Serviço one-shot: roda uma vez no primeiro boot, depois se desabilita
+cat > /etc/systemd/system/covenant-cpu-governor-setup.service << 'CPUSVC'
+[Unit]
+Description=Covenant CachyOS - CPU Governor Setup (primeiro boot)
+After=systemd-tmpfiles-setup.service
+Before=display-manager.service
+ConditionPathExists=!/etc/tmpfiles.d/cpu-governor.conf
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/covenant-cpu-governor-setup.sh
+RemainAfterExit=no
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+CPUSVC
+
+systemctl enable covenant-cpu-governor-setup.service 2>/dev/null \
+    && echo "     covenant-cpu-governor-setup.service habilitado (roda no primeiro boot)." \
+    || echo "     [!] será habilitado no primeiro boot."
+
+# udev como camada extra: garante hotplug de CPUs
 cat > /etc/udev/rules.d/50-cpu-governor.rules << 'CPUUDEV'
-# Covenant — intel_cpufreq performance
+# Covenant — performance governor (udev fallback)
 SUBSYSTEM=="cpu", ACTION=="add", ATTR{cpufreq/scaling_governor}="performance"
 CPUUDEV
 
-echo "     CPU governor: performance (28 cores via tmpfiles + udev)."
+echo "     CPU governor: serviço de primeiro boot + udev fallback configurados."
 
 # ---------------------------------------------------------------------------
 # 13. Limites de sistema
@@ -641,7 +691,7 @@ echo "    ✓ Env vars: RADV/Mesa/Vulkan/Qt Wayland"
 echo "    ✓ Serviços: irqbalance, power-profiles, haveged, fstrim"
 echo "    ✓ journald: 512MB máx, 1 semana"
 echo "    ✓ DNS: 1.1.1.1/9.9.9.9 com cache"
-echo "    ✓ CPU governor: performance"
+echo "    ✓ CPU governor: performance (serviço de primeiro boot, detecta CPUs reais)"
 echo "    ✓ Limites: nofile=1M, nproc=131K"
 echo "    ✓ /tmp: tmpfs 8GB em RAM"
 echo "    ✓ pacman: downloads paralelos=5"
