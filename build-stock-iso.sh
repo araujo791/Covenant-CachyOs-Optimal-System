@@ -355,7 +355,6 @@ net.core.wmem_default = 1048576
 net.ipv4.tcp_rmem = 4096 1048576 134217728
 net.ipv4.tcp_wmem = 4096 1048576 134217728
 net.ipv4.tcp_fastopen = 3
-net.ipv4.tcp_tw_reuse = 1
 net.ipv4.tcp_keepalive_time = 60
 net.ipv4.tcp_keepalive_intvl = 10
 net.ipv4.tcp_keepalive_probes = 6
@@ -366,7 +365,6 @@ net.ipv4.tcp_max_syn_backlog = 8192
 vm.max_map_count = 1048576
 kernel.pid_max = 4194304
 kernel.numa_balancing = 1
-kernel.yama.ptrace_scope = 0
 SYSCTL
 
 echo "     sysctl 90-covenant.conf criado (BBR, buffers, VM extra)."
@@ -425,7 +423,7 @@ if [[ -f "${MAKEPKG_CONF}" ]]; then
     sed -i 's/^RUSTFLAGS=.*/RUSTFLAGS="-C opt-level=3 -C target-cpu=native"/' "${MAKEPKG_CONF}" 2>/dev/null || true
     sed -i "s/^#MAKEFLAGS=.*/MAKEFLAGS=\"-j${NPROC}\"/" "${MAKEPKG_CONF}" 2>/dev/null || true
     sed -i "s/^MAKEFLAGS=.*/MAKEFLAGS=\"-j${NPROC}\"/" "${MAKEPKG_CONF}" 2>/dev/null || true
-    sed -i "s/^COMPRESSZST=.*/COMPRESSZST=(zstd -c -T${NPROC} --ultra -20 -)/" "${MAKEPKG_CONF}" 2>/dev/null || true
+    sed -i "s/^COMPRESSZST=.*/COMPRESSZST=(zstd -c -T0 -19 -)/" "${MAKEPKG_CONF}" 2>/dev/null || true
     echo "     makepkg: -march=native -O2 com ${NPROC} threads."
 else
     echo "     makepkg.conf não encontrado — pulando."
@@ -481,8 +479,7 @@ cat >> /etc/environment << 'ENVVARS'
 AMD_VULKAN_ICD=RADV
 VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/radeon_icd.x86_64.json
 MESA_NO_ERROR=1
-RADV_PERFTEST=aco,nosam
-ENABLE_GAMEMODE=1
+RADV_PERFTEST=aco
 QT_QPA_PLATFORM=wayland;xcb
 QT_WAYLAND_DISABLE_WINDOWDECORATION=1
 GDK_BACKEND=wayland,x11
@@ -502,7 +499,6 @@ ENABLE_SERVICES=(
     irqbalance.service
     power-profiles-daemon.service
     fstrim.timer
-    systemd-oomd.service
     earlyoom.service
 )
 
@@ -688,7 +684,7 @@ echo "    ✓ makepkg: -march=native -O2, $(nproc) threads"
 echo "    ✓ ananicy-cpp: regras compilação/WM/audio"
 echo "    ✓ earlyoom: kill em <3% RAM livre"
 echo "    ✓ Env vars: RADV/Mesa/Vulkan/Qt Wayland"
-echo "    ✓ Serviços: irqbalance, power-profiles, haveged, fstrim"
+echo "    ✓ Serviços: irqbalance, power-profiles-daemon, fstrim, earlyoom"
 echo "    ✓ journald: 512MB máx, 1 semana"
 echo "    ✓ DNS: 1.1.1.1/9.9.9.9 com cache"
 echo "    ✓ CPU governor: performance (serviço de primeiro boot, detecta CPUs reais)"
