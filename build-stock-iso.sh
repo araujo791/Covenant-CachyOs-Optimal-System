@@ -62,7 +62,6 @@ HW_REMOVE_PKGS=(
     lib32-vulkan-radeon lib32-mesa lib32-vulkan-icd-loader
     lib32-libva-mesa-driver lib32-mesa-vdpau rocm-opencl-runtime
     irssi lftp lynx mc occt
-    linux-covenant linux-covenant-headers
 )
 
 # ---------------------------------------------------------------------------
@@ -516,11 +515,11 @@ done
 DISABLE_SERVICES=(
     ModemManager.service
     bluetooth.service
-    cups.service
-    cups-browsed.service
-    avahi-daemon.service
-    avahi-daemon.socket
 )
+
+# NOTA: cups.service e avahi-daemon NÃO são desabilitados aqui.
+# - cups é instalado e deve estar disponível para o instalador (Calamares) configurar.
+# - avahi é necessário para o nss-mdns (resolução .local) funcionar corretamente.
 
 for svc in "${DISABLE_SERVICES[@]}"; do
     systemctl disable "${svc}" 2>/dev/null \
@@ -566,38 +565,14 @@ systemctl enable systemd-resolved.service 2>/dev/null || true
 # ---------------------------------------------------------------------------
 echo "  -> Configurando CPU governor (intel_cpufreq)..."
 
-cat > /etc/tmpfiles.d/cpu-governor.conf << 'CPUGOV'
-# Covenant — intel_cpufreq performance governor
-# Usa glob expandido pelo systemd-tmpfiles no boot
-w! /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor  - - - - performance
-w! /sys/devices/system/cpu/cpu1/cpufreq/scaling_governor  - - - - performance
-w! /sys/devices/system/cpu/cpu2/cpufreq/scaling_governor  - - - - performance
-w! /sys/devices/system/cpu/cpu3/cpufreq/scaling_governor  - - - - performance
-w! /sys/devices/system/cpu/cpu4/cpufreq/scaling_governor  - - - - performance
-w! /sys/devices/system/cpu/cpu5/cpufreq/scaling_governor  - - - - performance
-w! /sys/devices/system/cpu/cpu6/cpufreq/scaling_governor  - - - - performance
-w! /sys/devices/system/cpu/cpu7/cpufreq/scaling_governor  - - - - performance
-w! /sys/devices/system/cpu/cpu8/cpufreq/scaling_governor  - - - - performance
-w! /sys/devices/system/cpu/cpu9/cpufreq/scaling_governor  - - - - performance
-w! /sys/devices/system/cpu/cpu10/cpufreq/scaling_governor - - - - performance
-w! /sys/devices/system/cpu/cpu11/cpufreq/scaling_governor - - - - performance
-w! /sys/devices/system/cpu/cpu12/cpufreq/scaling_governor - - - - performance
-w! /sys/devices/system/cpu/cpu13/cpufreq/scaling_governor - - - - performance
-w! /sys/devices/system/cpu/cpu14/cpufreq/scaling_governor - - - - performance
-w! /sys/devices/system/cpu/cpu15/cpufreq/scaling_governor - - - - performance
-w! /sys/devices/system/cpu/cpu16/cpufreq/scaling_governor - - - - performance
-w! /sys/devices/system/cpu/cpu17/cpufreq/scaling_governor - - - - performance
-w! /sys/devices/system/cpu/cpu18/cpufreq/scaling_governor - - - - performance
-w! /sys/devices/system/cpu/cpu19/cpufreq/scaling_governor - - - - performance
-w! /sys/devices/system/cpu/cpu20/cpufreq/scaling_governor - - - - performance
-w! /sys/devices/system/cpu/cpu21/cpufreq/scaling_governor - - - - performance
-w! /sys/devices/system/cpu/cpu22/cpufreq/scaling_governor - - - - performance
-w! /sys/devices/system/cpu/cpu23/cpufreq/scaling_governor - - - - performance
-w! /sys/devices/system/cpu/cpu24/cpufreq/scaling_governor - - - - performance
-w! /sys/devices/system/cpu/cpu25/cpufreq/scaling_governor - - - - performance
-w! /sys/devices/system/cpu/cpu26/cpufreq/scaling_governor - - - - performance
-w! /sys/devices/system/cpu/cpu27/cpufreq/scaling_governor - - - - performance
-CPUGOV
+# Gera tmpfiles.d dinamicamente com base no número real de CPUs do sistema alvo
+CPU_COUNT=$(nproc 2>/dev/null || echo 4)
+{
+    echo "# Covenant — cpu governor: performance (gerado dinamicamente para ${CPU_COUNT} cores)"
+    for i in $(seq 0 $(( CPU_COUNT - 1 ))); do
+        printf 'w! /sys/devices/system/cpu/cpu%d/cpufreq/scaling_governor - - - - performance\n' "$i"
+    done
+} > /etc/tmpfiles.d/cpu-governor.conf
 
 # Também via udev como fallback
 cat > /etc/udev/rules.d/50-cpu-governor.rules << 'CPUUDEV'

@@ -29,6 +29,8 @@ ckbcomp
 clonezilla
 cloud-init
 cryptsetup
+cups
+cups-filters
 darkhttpd
 ddrescue
 dhcpcd
@@ -54,7 +56,6 @@ gpart
 gparted
 gptfdisk
 grub
-haveged
 hwdetect
 hwinfo
 hyperv
@@ -99,7 +100,6 @@ nfs-utils
 nilfs-utils
 nmap
 noto-fonts
-noto-fonts-cjk
 nss-mdns
 ntfs-3g
 ntp
@@ -170,5 +170,4 @@ wireplumber
 xdg-user-dirs-gtk
 xdg-utils
 xfsprogs
-zfs-utils
 zram-generator
