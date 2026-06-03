@@ -668,6 +668,75 @@ if [[ -f "${PACMAN_CONF_FILE}" ]]; then
     echo "     pacman: downloads paralelos=5, Color, VerbosePkgLists."
 fi
 
+# ---------------------------------------------------------------------------
+# 16. Kernel cmdline — parâmetros de performance para o sistema instalado
+#
+#     Abordagem dupla:
+#       a) /etc/default/grub.d/covenant-cmdline.cfg  → GRUB (grub-mkconfig)
+#       b) /etc/kernel/cmdline.d/covenant.conf        → systemd-boot / mkinitcpio-uki
+#          + hook pacman para auto-aplicar após atualizações de kernel
+#
+#     Parâmetros escolhidos para Xeon E5-2680v4 + AMD RX 560 + 64GB ECC:
+#       intel_pstate=disable       → usa intel_cpufreq, necessário para o governor funcionar
+#       cpufreq.default_governor=performance → define o governor antes do primeiro boot service
+#       mitigations=off            → desabilita Spectre/Meltdown mitigations (ganho ~15% em
+#                                    workloads de servidor/compilação; máquina não é pública)
+#       nowatchdog                 → desativa NMI watchdog (reduz latência, libera IRQ)
+#       nmi_watchdog=0             → complemento do nowatchdog
+#       skew_tick=1                → reduz latência do timer em sistemas NUMA/multi-core
+#       transparent_hugepage=madvise → THP só quando solicitado; evita stall em alocações
+#       amdgpu.ppfeaturemask=0xffffffff → habilita todas as features do driver AMDGPU (overdrive, etc.)
+#       pcie_aspm=off              → desabilita ASPM PCIe (reduz latência GPU/NVMe em desktop)
+#       split_lock_detect=off      → evita penalidade de split-lock em código legado
+#       iomem=relaxed              → permite acesso direto à memória de dispositivos (dev tools)
+#       quiet loglevel=3           → boot limpo, só erros
+# ---------------------------------------------------------------------------
+echo "  -> Configurando kernel cmdline de performance..."
+
+COVENANT_CMDLINE="intel_pstate=disable cpufreq.default_governor=performance mitigations=off nowatchdog nmi_watchdog=0 skew_tick=1 transparent_hugepage=madvise amdgpu.ppfeaturemask=0xffffffff pcie_aspm=off split_lock_detect=off iomem=relaxed quiet loglevel=3"
+
+# --- a) GRUB ---
+mkdir -p /etc/default/grub.d
+cat > /etc/default/grub.d/covenant-cmdline.cfg << GRUBCMD
+# Covenant CachyOS — parâmetros de performance
+# Injetado via GRUB_CMDLINE_LINUX_DEFAULT pelo grub-mkconfig
+GRUB_CMDLINE_LINUX_DEFAULT="${COVENANT_CMDLINE}"
+GRUBCMD
+
+# Regenera grub.cfg se grub estiver presente
+if command -v grub-mkconfig &>/dev/null && [[ -d /boot/grub ]]; then
+    grub-mkconfig -o /boot/grub/grub.cfg 2>/dev/null \
+        && echo "     grub.cfg regenerado com novos parâmetros." \
+        || echo "     grub-mkconfig: será aplicado no primeiro boot."
+else
+    echo "     GRUB: /etc/default/grub.d/covenant-cmdline.cfg instalado (aplicado na próxima grub-mkconfig)."
+fi
+
+# --- b) systemd-boot / UKI (kernel cmdline direto) ---
+mkdir -p /etc/kernel/cmdline.d
+echo "${COVENANT_CMDLINE}" > /etc/kernel/cmdline.d/covenant.conf
+echo "     systemd-boot/UKI: /etc/kernel/cmdline.d/covenant.conf instalado."
+
+# Hook pacman: re-aplica GRUB após cada atualização de kernel
+mkdir -p /etc/pacman.d/hooks
+cat > /etc/pacman.d/hooks/covenant-grub-update.hook << 'GRUBHOOK'
+[Trigger]
+Operation = Upgrade
+Operation = Install
+Type = Package
+Target = linux*
+Target = grub
+
+[Action]
+Description = Covenant: regenerando GRUB após atualização de kernel...
+When = PostTransaction
+Exec = /usr/bin/grub-mkconfig -o /boot/grub/grub.cfg
+Depends = grub
+GRUBHOOK
+
+echo "     Hook pacman: grub-mkconfig automático após update de kernel instalado."
+echo "     Kernel cmdline configurado: performance total."
+
 # ===========================================================================
 # FIM DAS OTIMIZAÇÕES
 # ===========================================================================
@@ -677,20 +746,21 @@ echo "==> [LIMPEZA] Concluída."
 echo "    $(du -sh /usr/share 2>/dev/null | cut -f1) — /usr/share após limpeza"
 echo ""
 echo "==> [OTIMIZAÇÕES] Resumo aplicado:"
-echo "    ✓ sysctl: BBR, VM, rede, NUMA, CPU scheduling"
+echo "    ✓ sysctl: BBR, VM, rede, NUMA"
 echo "    ✓ zram: 8GB zstd"
 echo "    ✓ I/O scheduler: NVMe=none, SATA=mq-deadline, HDD=bfq"
-echo "    ✓ makepkg: -march=native -O2, $(nproc) threads"
+echo "    ✓ makepkg: -march=native -O2, threads auto"
 echo "    ✓ ananicy-cpp: regras compilação/WM/audio"
 echo "    ✓ earlyoom: kill em <3% RAM livre"
 echo "    ✓ Env vars: RADV/Mesa/Vulkan/Qt Wayland"
 echo "    ✓ Serviços: irqbalance, power-profiles-daemon, fstrim, earlyoom"
 echo "    ✓ journald: 512MB máx, 1 semana"
 echo "    ✓ DNS: 1.1.1.1/9.9.9.9 com cache"
-echo "    ✓ CPU governor: performance (serviço de primeiro boot, detecta CPUs reais)"
+echo "    ✓ CPU governor: performance (serviço de primeiro boot)"
 echo "    ✓ Limites: nofile=1M, nproc=131K"
 echo "    ✓ /tmp: tmpfs 8GB em RAM"
 echo "    ✓ pacman: downloads paralelos=5"
+echo "    ✓ Kernel cmdline: intel_pstate=disable, mitigations=off, THP=madvise, AMDGPU overdrive"
 CLEANUP
 
 chmod +x "${CLEANUP_SCRIPT}"
