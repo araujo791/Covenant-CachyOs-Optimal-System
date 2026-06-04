@@ -570,6 +570,22 @@ for svc in "${ENABLE_SERVICES[@]}"; do
         || echo "     [!] ${svc} — não encontrado (ok)"
 done
 
+# fstrim: muda cadência de semanal para diária e adiciona log
+# O padrão (semanal) é conservador. Para desktop com compilação/Docker,
+# diário garante que o controller NVMe/SSD tem blocos livres anotados
+# com mais frequência, mantendo performance de escrita consistente.
+# OnCalendar=daily roda uma vez por dia no horário que o sistema estiver ligado.
+mkdir -p /etc/systemd/system/fstrim.timer.d
+cat > /etc/systemd/system/fstrim.timer.d/covenant-daily.conf << 'FSTRIMOVERRIDE'
+[Timer]
+# Sobrescreve a cadência padrão (semanal) para diária
+OnCalendar=
+OnCalendar=daily
+RandomizedDelaySec=1800
+FSTRIMOVERRIDE
+
+echo "     fstrim.timer: cadência alterada para diária (override em fstrim.timer.d/)."
+
 DISABLE_SERVICES=(
     ModemManager.service
     bluetooth.service
@@ -864,7 +880,7 @@ echo "    ✓ makepkg: -march=native -O2, threads auto"
 echo "    ✓ ananicy-cpp: regras compilação/WM/audio"
 echo "    ✓ earlyoom: kill em <3% RAM livre"
 echo "    ✓ Env vars: RADV/Mesa/Vulkan/Qt Wayland"
-echo "    ✓ Serviços: irqbalance, power-profiles-daemon, fstrim, earlyoom"
+echo "    ✓ Serviços: irqbalance, power-profiles-daemon, fstrim (diário), earlyoom"
 echo "    ✓ journald: 512MB máx, 1 semana"
 echo "    ✓ DNS: 1.1.1.1/9.9.9.9 com cache"
 echo "    ✓ CPU governor: performance (serviço de primeiro boot)"
