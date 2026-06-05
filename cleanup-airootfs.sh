@@ -443,32 +443,36 @@ COVENANT_PKGS_DIR="/root/covenant-pkgs"
 
 if ls "${COVENANT_PKGS_DIR}"/linux-covenant-[0-9]*.pkg.tar.zst &>/dev/null 2>&1; then
 
-    # Instala via extração direta com bsdtar — sem pacman, sem keyring, sem prompts.
-    # O pacman -U falha no chroot porque:
-    #   1. Não tem as chaves do CachyOS para verificar dependências
-    #   2. O provider 'initramfs' tem 4 opções e pede confirmação interativa
-    # bsdtar extrai o conteúdo do .pkg.tar.zst diretamente para / como root faria.
+    # Desabilita abort-on-error — erros tratados manualmente nesta seção
+    set +e
+
+    # Instala via tar direto — sem pacman, sem keyring, sem prompts
+    # O chroot do build não tem bsdtar disponível, usa GNU tar
     KERNEL_OK=false
     for pkg in "${COVENANT_PKGS_DIR}"/linux-covenant*.pkg.tar.zst; do
         echo "     Extraindo: $(basename "${pkg}")..."
-        bsdtar -xf "${pkg}" -C / \
+        tar -xf "${pkg}" -C / \
             --exclude='.PKGINFO' \
             --exclude='.INSTALL' \
             --exclude='.MTREE' \
             --exclude='.BUILDINFO' \
             --exclude='.CHANGELOG' \
-            2>/dev/null && echo "     OK: $(basename "${pkg}")" || echo "     [!] Falha: $(basename "${pkg}")"
+            2>/dev/null \
+            && echo "     OK: $(basename "${pkg}")" \
+            || echo "     [!] Falha ao extrair: $(basename "${pkg}")"
     done
 
-    # Verifica se o vmlinuz foi extraído — procura por qualquer nome possível
+    # Mostra o que foi extraído em /boot para debug
+    echo "     Conteúdo de /boot após extração:"
+    ls -la /boot/ 2>/dev/null || echo "     /boot vazio"
+
+    # Procura vmlinuz por qualquer nome possível
     VMLINUZ=""
-    # Nomes possíveis em kernels CachyOS/Arch:
     for candidate in \
         /boot/vmlinuz-linux-covenant \
         /boot/vmlinuz-linux-covenant-cachyos \
-        /boot/vmlinuz-7.*-covenant* \
-        /boot/vmlinuz-7.*covenant* \
-        /boot/vmlinuz-*covenant*; do
+        /boot/vmlinuz-*covenant* \
+        /boot/vmlinuz-*cachyos*; do
         found=$(ls ${candidate} 2>/dev/null | head -1)
         if [[ -n "${found}" ]]; then
             VMLINUZ="${found}"
@@ -476,38 +480,34 @@ if ls "${COVENANT_PKGS_DIR}"/linux-covenant-[0-9]*.pkg.tar.zst &>/dev/null 2>&1;
         fi
     done
 
-    # Fallback: qualquer vmlinuz novo em /boot
+    # Fallback: vmlinuz mais recente em /boot
     if [[ -z "${VMLINUZ}" ]]; then
-        VMLINUZ=$(ls -t /boot/vmlinuz* 2>/dev/null | head -1)
+        VMLINUZ=$(ls -t /boot/vmlinuz* 2>/dev/null | grep -v 'linux-cachyos$' | head -1)
     fi
 
     if [[ -n "${VMLINUZ}" ]]; then
-        echo "     vmlinuz encontrado: ${VMLINUZ}"
+        echo "     vmlinuz: ${VMLINUZ}"
         KERNEL_OK=true
-
-        # Cria symlink canônico se o nome for diferente do esperado
-        if [[ "${VMLINUZ}" != "/boot/vmlinuz-linux-covenant" ]]; then
-            ln -sf "${VMLINUZ}" /boot/vmlinuz-linux-covenant 2>/dev/null || true
-            echo "     Symlink: /boot/vmlinuz-linux-covenant → ${VMLINUZ}"
-        fi
+        # Symlink canônico para scripts que esperam nome fixo
+        [[ "${VMLINUZ}" != "/boot/vmlinuz-linux-covenant" ]] && \
+            ln -sf "${VMLINUZ}" /boot/vmlinuz-linux-covenant 2>/dev/null && \
+            echo "     Symlink criado: /boot/vmlinuz-linux-covenant"
     else
-        echo "     [!] vmlinuz não encontrado em /boot após extração"
-        echo "     Conteúdo de /boot:"
-        ls -la /boot/ 2>/dev/null || echo "     /boot vazio"
+        echo "     [!] vmlinuz não encontrado — kernel configurado no 1º boot."
         KERNEL_OK=false
     fi
 
-    # Registra no banco do pacman para que o sistema saiba que está instalado
-    # (evita que pacman tente reinstalar ou remova como órfão)
+    # Registra no DB do pacman via tar (sem bsdtar)
     PKGDB_DIR="/var/lib/pacman/local"
     mkdir -p "${PKGDB_DIR}"
     for pkg in "${COVENANT_PKGS_DIR}"/linux-covenant*.pkg.tar.zst; do
-        PKGNAME=$(bsdtar -xOf "${pkg}" .PKGINFO 2>/dev/null | grep '^pkgname' | cut -d' ' -f3)
-        PKGVER=$(bsdtar -xOf "${pkg}" .PKGINFO 2>/dev/null | grep '^pkgver' | cut -d' ' -f3)
+        PKGINFO=$(tar -xOf "${pkg}" .PKGINFO 2>/dev/null)
+        PKGNAME=$(echo "${PKGINFO}" | grep '^pkgname' | awk '{print $3}')
+        PKGVER=$(echo "${PKGINFO}" | grep '^pkgver' | awk '{print $3}')
         if [[ -n "${PKGNAME}" && -n "${PKGVER}" ]]; then
             ENTRY_DIR="${PKGDB_DIR}/${PKGNAME}-${PKGVER}"
             mkdir -p "${ENTRY_DIR}"
-            bsdtar -xOf "${pkg}" .PKGINFO 2>/dev/null > "${ENTRY_DIR}/desc" || true
+            echo "${PKGINFO}" > "${ENTRY_DIR}/desc"
             echo "     Registrado no pacman DB: ${PKGNAME}-${PKGVER}"
         fi
     done
