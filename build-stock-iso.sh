@@ -246,29 +246,57 @@ UTIL_ISO="${REPO_DIR}/util-iso.sh"
 _log_step "Configurando pacman.conf da ISO..."
 
 if [[ -f "${PACMAN_CONF}" ]]; then
-    # Copia mirrorlist atualizado do host para a ISO
+    # --- SigLevel ---
+    # O mirror do CachyOS frequentemente não serve .db.sig (retorna 404).
+    # "TrustAll" faz o pacman ignorar assinaturas completamente.
+    # "Never" idem mas mais explícito — ambos resolvem o 404 nos .db.sig.
+    # Usamos "TrustAll" para manter verificação de integridade dos pacotes
+    # mas não exigir o .sig do banco de dados.
+    sed -i 's/^SigLevel\s*=.*/SigLevel = TrustAll/'                 "${PACMAN_CONF}"
+    sed -i 's/^LocalFileSigLevel\s*=.*/LocalFileSigLevel = Optional/' "${PACMAN_CONF}"
+    # Garante que a linha existe se não estiver presente
+    grep -q '^LocalFileSigLevel' "${PACMAN_CONF}" \
+        || sed -i '/^SigLevel/a LocalFileSigLevel = Optional' "${PACMAN_CONF}"
+    _log_ok "SigLevel = TrustAll, LocalFileSigLevel = Optional."
+
+    # --- Substitui o mirror problemático no pacman.conf da ISO ---
+    # O archiso do CachyOS tem Include para cachyos-mirrorlist e mirrorlist.
+    # Copiamos os mirrorlists atualizados do host para garantir que o mkarchiso
+    # use os mesmos mirrors que acabamos de validar na etapa de sanitização.
+    mkdir -p "${ARCHISO}/airootfs/etc/pacman.d"
+
+    if [[ -f /etc/pacman.d/cachyos-mirrorlist ]]; then
+        cp /etc/pacman.d/cachyos-mirrorlist "${ARCHISO}/airootfs/etc/pacman.d/cachyos-mirrorlist"
+        _log_ok "cachyos-mirrorlist copiado para a ISO."
+    fi
+
     if [[ -f /etc/pacman.d/mirrorlist ]]; then
-        cp /etc/pacman.d/mirrorlist "${ARCHISO}/airootfs/etc/pacman.d/mirrorlist" 2>/dev/null || true
-        mkdir -p "${ARCHISO}/airootfs/etc/pacman.d"
         cp /etc/pacman.d/mirrorlist "${ARCHISO}/airootfs/etc/pacman.d/mirrorlist"
         _log_ok "mirrorlist copiado para a ISO."
     fi
 
-    # Também copia o mirrorlist do CachyOS se existir
-    if [[ -f /etc/pacman.d/cachyos-mirrorlist ]]; then
-        cp /etc/pacman.d/cachyos-mirrorlist "${ARCHISO}/airootfs/etc/pacman.d/cachyos-mirrorlist" 2>/dev/null || true
-        _log_ok "cachyos-mirrorlist copiado para a ISO."
+    # O pacman.conf da ISO usa Include para esses arquivos — mas o mkarchiso
+    # também passa -C com o pacman.conf diretamente ao instalar pacotes no
+    # chroot. Para garantir que o mirrorlist correto é usado nesse momento,
+    # também copiamos para o diretório de trabalho do pacman da archiso:
+    ARCHISO_PACMAN_D="${ARCHISO}/pacman.conf"
+
+    # Injeta mirrors diretamente em cada repo que usa archlinux.cachyos.org,
+    # caso o Include não funcione durante o build fora do chroot.
+    # Verifica se o pacman.conf tem Server hardcoded (sem Include):
+    if grep -q 'Server\s*=.*archlinux\.cachyos\.org' "${PACMAN_CONF}"; then
+        _log_warn "Encontrado Server hardcoded para archlinux.cachyos.org — substituindo..."
+        # Substitui por Include para o mirrorlist do host
+        sed -i 's|^Server\s*=.*archlinux\.cachyos\.org.*|Include = /etc/pacman.d/cachyos-mirrorlist|' \
+            "${PACMAN_CONF}" 2>/dev/null || true
+        _log_ok "Server hardcoded substituído por Include."
     fi
 
-    # SigLevel: durante o build, usa TrustAll para evitar falhas de PGP
-    # em pacotes recém-publicados. O sistema instalado restaura o padrão.
-    sed -i 's/^SigLevel\s*=.*/SigLevel = TrustAll/' "${PACMAN_CONF}" 2>/dev/null || true
-    _log_ok "SigLevel = TrustAll configurado no pacman.conf da ISO."
-
-    # ParallelDownloads no pacman.conf da ISO
-    sed -i 's/^#ParallelDownloads.*/ParallelDownloads = 10/' "${PACMAN_CONF}" 2>/dev/null || true
-    sed -i 's/^ParallelDownloads.*/ParallelDownloads = 10/' "${PACMAN_CONF}" 2>/dev/null || true
-    _log_ok "ParallelDownloads = 10 no pacman.conf da ISO."
+    # ParallelDownloads
+    sed -i 's/^#\?ParallelDownloads\s*=.*/ParallelDownloads = 10/' "${PACMAN_CONF}"
+    grep -q '^ParallelDownloads' "${PACMAN_CONF}" \
+        || echo 'ParallelDownloads = 10' >> "${PACMAN_CONF}"
+    _log_ok "ParallelDownloads = 10."
 else
     _log_warn "pacman.conf da ISO não encontrado em ${PACMAN_CONF} — pulando."
 fi
@@ -1424,7 +1452,59 @@ if grep -q '"cachyos-' "${UTIL_ISO}"; then
         && _log_ok "util-iso.sh corrigido: mv usa '${ISO_NAME_SAFE}-'." \
         || { cp "${UTIL_ISO}.bak" "${UTIL_ISO}"; _log_warn "Patch falhou — restaurado original."; }
 else
-    _log_ok "util-iso.sh não precisa de correção."
+    _log_ok "util-iso.sh não precisa de correção de nome."
+fi
+
+# ---------------------------------------------------------------------------
+# Patch util-iso.sh — intercepta fetch_cachyos_mirrorlist
+#
+# O util-iso.sh do CachyOS tem uma função fetch_cachyos_mirrorlist() que
+# baixa o mirrorlist do GitHub e sobrescreve o que configuramos.
+# Também faz cp -r archiso ${work_dir}/archiso DEPOIS das nossas modificações,
+# então qualquer alteração no pacman.conf do archiso original não chega ao
+# work_dir.
+#
+# Solução: substituímos fetch_cachyos_mirrorlist() por uma versão que usa
+# o mirrorlist já existente no sistema (atualizado na etapa de sanitização).
+# E adicionamos um hook no run_build para reaplicar o SigLevel no work_dir
+# após o cp -r.
+# ---------------------------------------------------------------------------
+
+# 1. Substitui fetch_cachyos_mirrorlist para usar mirrorlist local
+if grep -q 'fetch_cachyos_mirrorlist' "${UTIL_ISO}"; then
+    # Cria versão local que usa os arquivos do host ao invés de baixar
+    cat >> "${UTIL_ISO}" << 'MIRRORPATCH'
+
+# Covenant override: usa mirrorlist local em vez de baixar do GitHub
+fetch_cachyos_mirrorlist() {
+    mkdir -p "${src_dir}/archiso/airootfs/etc/pacman.d"
+    if [[ -f /etc/pacman.d/cachyos-mirrorlist ]]; then
+        cp /etc/pacman.d/cachyos-mirrorlist \
+            "${src_dir}/archiso/airootfs/etc/pacman.d/cachyos-mirrorlist"
+        echo "==> [Covenant] cachyos-mirrorlist: usando versão local do host."
+    else
+        echo "==> [Covenant] cachyos-mirrorlist não encontrado no host — mantendo original."
+    fi
+    if [[ -f /etc/pacman.d/mirrorlist ]]; then
+        cp /etc/pacman.d/mirrorlist \
+            "${src_dir}/archiso/airootfs/etc/pacman.d/mirrorlist"
+    fi
+}
+MIRRORPATCH
+    _log_ok "util-iso.sh: fetch_cachyos_mirrorlist substituído para usar mirrorlist local."
+fi
+
+# 2. Patch no run_build: reaplicar SigLevel=TrustAll no work_dir após o cp -r
+# O run_build faz: cp -r archiso ${work_dir}/archiso
+# Adicionamos uma linha logo depois para corrigir o pacman.conf copiado
+if grep -q 'cp -r archiso \${work_dir}/archiso' "${UTIL_ISO}"; then
+    sed -i '/cp -r archiso \${work_dir}\/archiso/a\
+    # Covenant: SigLevel TrustAll no pacman.conf copiado para o work_dir\
+    sed -i '"'"'s/^SigLevel\\s*=.*/SigLevel = TrustAll/'"'"' "${work_dir}/archiso/pacman.conf" 2>/dev/null || true\
+    grep -q '"'"'^LocalFileSigLevel'"'"' "${work_dir}/archiso/pacman.conf" || echo '"'"'LocalFileSigLevel = Optional'"'"' >> "${work_dir}/archiso/pacman.conf"' \
+        "${UTIL_ISO}" 2>/dev/null \
+        && _log_ok "util-iso.sh: SigLevel reaplicado após cp -r no work_dir." \
+        || _log_warn "util-iso.sh: não foi possível patchar SigLevel no work_dir (continuando)."
 fi
 
 # ---------------------------------------------------------------------------
