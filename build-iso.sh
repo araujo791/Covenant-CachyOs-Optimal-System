@@ -335,6 +335,16 @@ for f in "${TARGET_FILES[@]}"; do
     fi
 done
 
+# Garante pacotes obrigatórios do mkarchiso nos dois arquivos
+REQUIRED_ISO_PKGS=(syslinux memtest86+ memtest86+-efi edk2-shell)
+for pkg in "${REQUIRED_ISO_PKGS[@]}"; do
+    for f in "${TARGET_FILES[@]}"; do
+        [[ -f "${f}" ]] || continue
+        grep -q "^${pkg}$" "${f}" 2>/dev/null || echo "${pkg}" >> "${f}"
+    done
+done
+_log_ok "Pacotes obrigatórios do mkarchiso garantidos (syslinux, memtest, edk2-shell)."
+
 # Garante pacotes de performance no packages.x86_64
 for pkg in "${PERFORMANCE_PKGS[@]}"; do
     grep -q "^${pkg}$" "${PACKAGES}" 2>/dev/null || echo "${pkg}" >> "${PACKAGES}"
