@@ -246,6 +246,27 @@ if grep -q '"cachyos-' "${UTIL_ISO}"; then
     _log_ok "Nome da ISO corrigido para '${ISO_NAME_SAFE}-'."
 fi
 
+# Patch D: passa --noconfirm para todas as chamadas de pacman dentro do util-iso.sh
+# Resolve prompts interativos de providers (iptables, qt6-multimedia, etc.)
+python3 - "${UTIL_ISO}" << 'PYEOF'
+import sys, re
+path = sys.argv[1]
+content = open(path).read()
+
+# Adiciona --noconfirm em chamadas pacman -S que não tenham ainda
+# Evita duplicar se já presente
+new_content = re.sub(
+    r'(pacman\s+-S(?!.*--noconfirm)(?:\s+--needed)?)\b',
+    r'\1 --noconfirm',
+    content
+)
+if new_content != content:
+    open(path, 'w').write(new_content)
+    print("OK: --noconfirm adicionado nas chamadas pacman -S.")
+else:
+    print("OK: --noconfirm já presente ou sem chamadas pacman -S para patchar.")
+PYEOF
+
 _log_ok "util-iso.sh patchado."
 
 # ---------------------------------------------------------------------------
@@ -268,19 +289,39 @@ fi
 _log_step "Aplicando packages.x86_64 customizado..."
 if [[ -f "${SCRIPT_DIR}/packages.x86_64" ]]; then
     cp "${SCRIPT_DIR}/packages.x86_64" "${PACKAGES}"
-    _log_ok "packages.x86_64 aplicado."
+    _log_ok "packages.x86_64 aplicado ($(wc -l < "${PACKAGES}") pacotes)."
+else
+    _log_warn "packages.x86_64 não encontrado — usando o do CachyOS."
 fi
 
-# Remove pacotes de hardware não presente
-_log_step "Otimizando packages para hardware alvo..."
+# Remove pacotes incompatíveis/desnecessários
+_log_step "Removendo pacotes incompatíveis..."
 for pkg in "${HW_REMOVE_PKGS[@]}"; do
-    sed -i "/^${pkg}$/d" "${PACKAGES}" 2>/dev/null || true
+    if grep -q "^${pkg}$" "${PACKAGES}" 2>/dev/null; then
+        sed -i "/^${pkg}$/d" "${PACKAGES}"
+        _log_ok "Removido: ${pkg}"
+    fi
 done
+
+# Resolve pacotes que causam prompts interativos durante o build
+# iptables: substitui por iptables-nft (padrão moderno, sem prompt de escolha)
+if grep -q '^iptables$' "${PACKAGES}" 2>/dev/null; then
+    sed -i 's/^iptables$/iptables-nft/' "${PACKAGES}"
+    _log_ok "iptables → iptables-nft (sem prompt interativo)."
+fi
+sed -i '/^iptables-legacy$/d' "${PACKAGES}" 2>/dev/null || true
+
+# qt6-multimedia: escolhe ffmpeg explicitamente (sem prompt de provider)
+sed -i '/^qt6-multimedia$/d' "${PACKAGES}" 2>/dev/null || true
+grep -q '^qt6-multimedia-ffmpeg$' "${PACKAGES}" 2>/dev/null \
+    || echo 'qt6-multimedia-ffmpeg' >> "${PACKAGES}"
+_log_ok "qt6-multimedia-ffmpeg definido (sem prompt de provider)."
+
 # Garante pacotes de performance
 for pkg in "${PERFORMANCE_PKGS[@]}"; do
-    grep -q "^${pkg}$" "${PACKAGES}" || echo "${pkg}" >> "${PACKAGES}"
+    grep -q "^${pkg}$" "${PACKAGES}" 2>/dev/null || echo "${pkg}" >> "${PACKAGES}"
 done
-_log_ok "Packages otimizados para Xeon E5-2680v4 + RX 560."
+_log_ok "Packages finais: $(wc -l < "${PACKAGES}") pacotes."
 
 # ---------------------------------------------------------------------------
 # Kernel Covenant — copia ou compila
