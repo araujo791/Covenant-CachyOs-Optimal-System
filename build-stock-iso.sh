@@ -1445,66 +1445,129 @@ _log_ok "mkinitcpio.conf — mantendo configuração original do archiso."
 _log_step "Verificando patch do util-iso.sh..."
 [[ -r "${UTIL_ISO}" ]] || _log_fail "util-iso.sh não encontrado."
 
+# Patch 1: corrige nome do arquivo ISO ("cachyos-" → nome customizado)
 if grep -q '"cachyos-' "${UTIL_ISO}"; then
     cp "${UTIL_ISO}" "${UTIL_ISO}.bak"
     sed -i "s|\"cachyos-\$(date|\"${ISO_NAME_SAFE}-\$(date|g" "${UTIL_ISO}"
     grep -q "\"${ISO_NAME_SAFE}-\$(date" "${UTIL_ISO}" \
-        && _log_ok "util-iso.sh corrigido: mv usa '${ISO_NAME_SAFE}-'." \
-        || { cp "${UTIL_ISO}.bak" "${UTIL_ISO}"; _log_warn "Patch falhou — restaurado original."; }
+        && _log_ok "util-iso.sh: nome da ISO corrigido para '${ISO_NAME_SAFE}-'." \
+        || { cp "${UTIL_ISO}.bak" "${UTIL_ISO}"; _log_warn "Patch de nome falhou — restaurado."; }
 else
-    _log_ok "util-iso.sh não precisa de correção de nome."
+    _log_ok "util-iso.sh: nome da ISO não precisa de correção."
 fi
 
 # ---------------------------------------------------------------------------
-# Patch util-iso.sh — intercepta fetch_cachyos_mirrorlist
+# Patch 2: SigLevel — abordagem direta no /usr/bin/mkarchiso
 #
-# O util-iso.sh do CachyOS tem uma função fetch_cachyos_mirrorlist() que
-# baixa o mirrorlist do GitHub e sobrescreve o que configuramos.
-# Também faz cp -r archiso ${work_dir}/archiso DEPOIS das nossas modificações,
-# então qualquer alteração no pacman.conf do archiso original não chega ao
-# work_dir.
+# O mkarchiso chama pacman com -C <pacman.conf> onde <pacman.conf> é o
+# arquivo copiado para ${work_dir}/archiso/pacman.conf.
+# A forma mais confiável de forçar SigLevel=Never é patchar o próprio
+# mkarchiso para adicionar --config com SigLevel correto, OU simplesmente
+# fazer sed no pacman.conf DENTRO do work_dir após o cp -r.
 #
-# Solução: substituímos fetch_cachyos_mirrorlist() por uma versão que usa
-# o mirrorlist já existente no sistema (atualizado na etapa de sanitização).
-# E adicionamos um hook no run_build para reaplicar o SigLevel no work_dir
-# após o cp -r.
+# O util-iso.sh já tem modify_mkarchiso() — aproveitamos o mesmo mecanismo
+# para adicionar nosso patch via append na função modify_mkarchiso.
 # ---------------------------------------------------------------------------
 
-# 1. Substitui fetch_cachyos_mirrorlist para usar mirrorlist local
-if grep -q 'fetch_cachyos_mirrorlist' "${UTIL_ISO}"; then
-    # Cria versão local que usa os arquivos do host ao invés de baixar
-    cat >> "${UTIL_ISO}" << 'MIRRORPATCH'
+# Verifica se o patch já foi aplicado
+if ! grep -q 'Covenant.*SigLevel' "${UTIL_ISO}"; then
 
-# Covenant override: usa mirrorlist local em vez de baixar do GitHub
-fetch_cachyos_mirrorlist() {
-    mkdir -p "${src_dir}/archiso/airootfs/etc/pacman.d"
+    # Append dentro de modify_mkarchiso() para reaplicar SigLevel após o
+    # cp -r archiso ${work_dir}/archiso já ter sido executado.
+    # Fazemos isso substituindo a linha do cp -r por ela mesma + nosso patch.
+    python3 << PYEOF
+import re
+
+with open('${UTIL_ISO}', 'r') as f:
+    content = f.read()
+
+old = '    cp -r archiso \${work_dir}/archiso'
+new = '''    cp -r archiso \${work_dir}/archiso
+
+    # Covenant: força SigLevel=Never no pacman.conf do work_dir
+    # Resolve 404 nos .db.sig do mirror archlinux.cachyos.org
+    _wdir_pacman="\${work_dir}/archiso/pacman.conf"
+    if [[ -f "\${_wdir_pacman}" ]]; then
+        sed -i 's/^SigLevel\\s*=.*/SigLevel = Never/' "\${_wdir_pacman}"
+        grep -q '^LocalFileSigLevel' "\${_wdir_pacman}" \\
+            || echo 'LocalFileSigLevel = Never' >> "\${_wdir_pacman}"
+        echo "==> [Covenant] SigLevel=Never aplicado em \${_wdir_pacman}"
+    fi'''
+
+if old in content:
+    content = content.replace(old, new)
+    with open('${UTIL_ISO}', 'w') as f:
+        f.write(content)
+    print('OK: SigLevel patch aplicado no util-iso.sh')
+else:
+    print('WARN: linha cp -r nao encontrada — patch nao aplicado')
+PYEOF
+
+    grep -q 'Covenant.*SigLevel' "${UTIL_ISO}" \
+        && _log_ok "util-iso.sh: patch SigLevel=Never adicionado após cp -r." \
+        || _log_warn "util-iso.sh: patch SigLevel não aplicado — tentativa alternativa..."
+
+    # Alternativa: patcha diretamente o /usr/bin/mkarchiso para ignorar sig
+    # Adiciona --config inline substituindo a chamada do pacman dentro do mkarchiso
+    if ! grep -q 'Covenant.*SigLevel' "${UTIL_ISO}"; then
+        _log_warn "Aplicando SigLevel diretamente no /usr/bin/mkarchiso..."
+        if grep -q 'SigLevel' /usr/bin/mkarchiso 2>/dev/null; then
+            sudo sed -i 's/SigLevel = Required DatabaseOptional/SigLevel = Never/g' \
+                /usr/bin/mkarchiso 2>/dev/null \
+                && _log_ok "/usr/bin/mkarchiso: SigLevel=Never aplicado." \
+                || _log_warn "Falha ao patchar /usr/bin/mkarchiso."
+        fi
+        # Força via pacman.conf da archiso (última linha de defesa)
+        if [[ -f "${PACMAN_CONF}" ]]; then
+            sed -i 's/^SigLevel\s*=.*/SigLevel = Never/'       "${PACMAN_CONF}"
+            sed -i 's/^LocalFileSigLevel\s*=.*/LocalFileSigLevel = Never/' "${PACMAN_CONF}"
+            grep -q '^LocalFileSigLevel' "${PACMAN_CONF}" \
+                || echo 'LocalFileSigLevel = Never' >> "${PACMAN_CONF}"
+            _log_ok "pacman.conf da archiso: SigLevel=Never (fallback)."
+        fi
+    fi
+else
+    _log_ok "util-iso.sh: patch SigLevel já aplicado."
+fi
+
+# Patch 3: fetch_cachyos_mirrorlist — usa mirrorlist local do host
+if grep -q 'fetch_cachyos_mirrorlist' "${UTIL_ISO}" \
+&& ! grep -q 'Covenant.*mirrorlist local' "${UTIL_ISO}"; then
+
+    python3 << PYEOF2
+with open('${UTIL_ISO}', 'r') as f:
+    content = f.read()
+
+# Substitui o corpo da função fetch_cachyos_mirrorlist
+import re
+old_func = re.search(
+    r'(fetch_cachyos_mirrorlist\(\)\s*\{)(.*?)(\n\})',
+    content, re.DOTALL
+)
+if old_func:
+    new_func = '''fetch_cachyos_mirrorlist() {
+    # Covenant: usa mirrorlist local do host (já atualizado pela sanitização)
+    mkdir -p "\${src_dir}/archiso/airootfs/etc/pacman.d"
     if [[ -f /etc/pacman.d/cachyos-mirrorlist ]]; then
-        cp /etc/pacman.d/cachyos-mirrorlist \
-            "${src_dir}/archiso/airootfs/etc/pacman.d/cachyos-mirrorlist"
+        cp /etc/pacman.d/cachyos-mirrorlist \\
+            "\${src_dir}/archiso/airootfs/etc/pacman.d/cachyos-mirrorlist"
         echo "==> [Covenant] cachyos-mirrorlist: usando versão local do host."
-    else
-        echo "==> [Covenant] cachyos-mirrorlist não encontrado no host — mantendo original."
     fi
-    if [[ -f /etc/pacman.d/mirrorlist ]]; then
-        cp /etc/pacman.d/mirrorlist \
-            "${src_dir}/archiso/airootfs/etc/pacman.d/mirrorlist"
-    fi
-}
-MIRRORPATCH
-    _log_ok "util-iso.sh: fetch_cachyos_mirrorlist substituído para usar mirrorlist local."
-fi
+    [[ -f /etc/pacman.d/mirrorlist ]] && \\
+        cp /etc/pacman.d/mirrorlist \\
+            "\${src_dir}/archiso/airootfs/etc/pacman.d/mirrorlist"
+}'''
+    content = content[:old_func.start()] + new_func + content[old_func.end():]
+    with open('${UTIL_ISO}', 'w') as f:
+        f.write(content)
+    print('OK: fetch_cachyos_mirrorlist substituído')
+else:
+    print('WARN: função não encontrada')
+PYEOF2
 
-# 2. Patch no run_build: reaplicar SigLevel=TrustAll no work_dir após o cp -r
-# O run_build faz: cp -r archiso ${work_dir}/archiso
-# Adicionamos uma linha logo depois para corrigir o pacman.conf copiado
-if grep -q 'cp -r archiso \${work_dir}/archiso' "${UTIL_ISO}"; then
-    sed -i '/cp -r archiso \${work_dir}\/archiso/a\
-    # Covenant: SigLevel TrustAll no pacman.conf copiado para o work_dir\
-    sed -i '"'"'s/^SigLevel\\s*=.*/SigLevel = TrustAll/'"'"' "${work_dir}/archiso/pacman.conf" 2>/dev/null || true\
-    grep -q '"'"'^LocalFileSigLevel'"'"' "${work_dir}/archiso/pacman.conf" || echo '"'"'LocalFileSigLevel = Optional'"'"' >> "${work_dir}/archiso/pacman.conf"' \
-        "${UTIL_ISO}" 2>/dev/null \
-        && _log_ok "util-iso.sh: SigLevel reaplicado após cp -r no work_dir." \
-        || _log_warn "util-iso.sh: não foi possível patchar SigLevel no work_dir (continuando)."
+    grep -q 'Covenant.*mirrorlist local' "${UTIL_ISO}" \
+        && _log_ok "util-iso.sh: fetch_cachyos_mirrorlist usa mirrorlist local." \
+        || _log_warn "util-iso.sh: substituição de fetch_cachyos_mirrorlist falhou."
 fi
 
 # ---------------------------------------------------------------------------
