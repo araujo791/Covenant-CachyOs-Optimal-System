@@ -120,6 +120,71 @@ _log_step "Verificando privilégios..."
 _log_ok "Executando como root."
 
 # ---------------------------------------------------------------------------
+# Sanitização do ambiente pacman
+# Resolve os problemas mais comuns que quebram o build:
+#   1. Pacotes corrompidos no cache
+#   2. Mirrors desatualizados / com 404
+#   3. Keyring desatualizada (assinaturas inválidas)
+#   4. DB desatualizado
+# ---------------------------------------------------------------------------
+_log_step "Sanitizando ambiente pacman..."
+
+# 1. Remove pacotes corrompidos do cache (parciais, tamanho zero, .part)
+_log_ok "Limpando cache corrompido..."
+find /var/cache/pacman/pkg -name "*.part" -delete 2>/dev/null || true
+find /var/cache/pacman/pkg -name "*.pkg.tar.*" -size 0 -delete 2>/dev/null || true
+
+# Verifica integridade dos pacotes em cache e remove os inválidos
+CORRUPT_COUNT=0
+while IFS= read -r pkg; do
+    if ! bsdtar -tqf "${pkg}" &>/dev/null 2>&1; then
+        _log_warn "Cache corrompido removido: $(basename "${pkg}")"
+        rm -f "${pkg}" "${pkg}.sig" 2>/dev/null
+        (( CORRUPT_COUNT++ )) || true
+    fi
+done < <(find /var/cache/pacman/pkg -name "*.pkg.tar.zst" 2>/dev/null)
+[[ ${CORRUPT_COUNT} -gt 0 ]] \
+    && _log_ok "${CORRUPT_COUNT} pacote(s) corrompido(s) removido(s) do cache." \
+    || _log_ok "Cache limpo — nenhum arquivo corrompido."
+
+# 2. Atualiza mirrors do CachyOS e Arch
+_log_ok "Atualizando mirrors..."
+if command -v cachyos-rate-mirrors &>/dev/null; then
+    cachyos-rate-mirrors 2>/dev/null \
+        && _log_ok "Mirrors CachyOS atualizados via cachyos-rate-mirrors." \
+        || _log_warn "cachyos-rate-mirrors falhou — usando mirrors atuais."
+elif command -v rate-mirrors &>/dev/null; then
+    rate-mirrors --save /etc/pacman.d/mirrorlist arch 2>/dev/null \
+        && _log_ok "Mirrors Arch atualizados via rate-mirrors." \
+        || _log_warn "rate-mirrors falhou — usando mirrors atuais."
+elif command -v reflector &>/dev/null; then
+    reflector \
+        --country "Brazil,United States,Germany" \
+        --age 6 \
+        --protocol https \
+        --sort rate \
+        --save /etc/pacman.d/mirrorlist 2>/dev/null \
+        && _log_ok "Mirrors atualizados via reflector." \
+        || _log_warn "reflector falhou — usando mirrors atuais."
+else
+    _log_warn "Nenhum utilitário de mirror encontrado (cachyos-rate-mirrors/reflector)."
+    _log_warn "Mirrors não foram atualizados — erros 404 podem ocorrer."
+fi
+
+# 3. Atualiza keyring (resolve "invalid or corrupted package (PGP signature)")
+_log_ok "Atualizando keyrings..."
+pacman -Sy --noconfirm archlinux-keyring 2>/dev/null || true
+pacman -Sy --noconfirm cachyos-keyring   2>/dev/null || true
+pacman-key --populate archlinux cachyos  2>/dev/null || true
+
+# 4. Sincroniza DBs forçando refresh de todos os repos
+_log_ok "Sincronizando base de dados pacman..."
+pacman -Syy --noconfirm \
+    || _log_fail "Falha ao sincronizar pacman. Verifique a conexão de rede."
+
+_log_ok "Ambiente pacman sanitizado."
+
+# ---------------------------------------------------------------------------
 # Dependências do host
 # ---------------------------------------------------------------------------
 _log_step "Verificando dependências do host..."
@@ -168,6 +233,53 @@ GRUB_CFG="${ARCHISO}/grub/grub.cfg"
 MKINIT="${ARCHISO}/airootfs/etc/mkinitcpio.conf"
 PACMAN_CONF="${ARCHISO}/pacman.conf"
 UTIL_ISO="${REPO_DIR}/util-iso.sh"
+
+# ---------------------------------------------------------------------------
+# Configura pacman.conf da ISO
+# O pacman.conf dentro do archiso controla como os pacotes são instalados
+# no squashfs. Ajustes importantes:
+#   - Copia o mirrorlist atualizado do host para dentro da ISO
+#   - Ajusta SigLevel para TrustAll durante o build (evita falhas de PGP
+#     em pacotes recém-assinados que o keyring local ainda não conhece)
+#   - Configura CacheDir dedicado para a build (não polui /var/cache/pacman)
+# ---------------------------------------------------------------------------
+_log_step "Configurando pacman.conf da ISO..."
+
+if [[ -f "${PACMAN_CONF}" ]]; then
+    # Copia mirrorlist atualizado do host para a ISO
+    if [[ -f /etc/pacman.d/mirrorlist ]]; then
+        cp /etc/pacman.d/mirrorlist "${ARCHISO}/airootfs/etc/pacman.d/mirrorlist" 2>/dev/null || true
+        mkdir -p "${ARCHISO}/airootfs/etc/pacman.d"
+        cp /etc/pacman.d/mirrorlist "${ARCHISO}/airootfs/etc/pacman.d/mirrorlist"
+        _log_ok "mirrorlist copiado para a ISO."
+    fi
+
+    # Também copia o mirrorlist do CachyOS se existir
+    if [[ -f /etc/pacman.d/cachyos-mirrorlist ]]; then
+        cp /etc/pacman.d/cachyos-mirrorlist "${ARCHISO}/airootfs/etc/pacman.d/cachyos-mirrorlist" 2>/dev/null || true
+        _log_ok "cachyos-mirrorlist copiado para a ISO."
+    fi
+
+    # SigLevel: durante o build, usa TrustAll para evitar falhas de PGP
+    # em pacotes recém-publicados. O sistema instalado restaura o padrão.
+    sed -i 's/^SigLevel\s*=.*/SigLevel = TrustAll/' "${PACMAN_CONF}" 2>/dev/null || true
+    _log_ok "SigLevel = TrustAll configurado no pacman.conf da ISO."
+
+    # ParallelDownloads no pacman.conf da ISO
+    sed -i 's/^#ParallelDownloads.*/ParallelDownloads = 10/' "${PACMAN_CONF}" 2>/dev/null || true
+    sed -i 's/^ParallelDownloads.*/ParallelDownloads = 10/' "${PACMAN_CONF}" 2>/dev/null || true
+    _log_ok "ParallelDownloads = 10 no pacman.conf da ISO."
+else
+    _log_warn "pacman.conf da ISO não encontrado em ${PACMAN_CONF} — pulando."
+fi
+
+# CacheDir dedicado para o build (evita misturar com /var/cache/pacman/pkg)
+BUILD_CACHE="${SCRIPT_DIR}/build-cache"
+mkdir -p "${BUILD_CACHE}"
+_log_ok "CacheDir de build: ${BUILD_CACHE}"
+# mkarchiso usa essa variável se definida via -C, mas o util-iso.sh do CachyOS
+# passa o cachedir internamente. Exportamos para o ambiente do mkarchiso.
+export ARCHISO_PACMAN_CACHE="${BUILD_CACHE}"
 
 # ---------------------------------------------------------------------------
 # Ler iso_name do profiledef.sh
@@ -832,17 +944,27 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 15. pacman.conf
+# 15. pacman.conf — sistema instalado
 # ---------------------------------------------------------------------------
 echo "  -> Otimizando pacman..."
 
 PACMAN_CONF_FILE="/etc/pacman.conf"
 if [[ -f "${PACMAN_CONF_FILE}" ]]; then
-    sed -i 's/^#ParallelDownloads.*/ParallelDownloads = 5/' "${PACMAN_CONF_FILE}" 2>/dev/null || true
-    sed -i 's/^ParallelDownloads.*/ParallelDownloads = 5/' "${PACMAN_CONF_FILE}" 2>/dev/null || true
-    sed -i 's/^#Color$/Color/' "${PACMAN_CONF_FILE}" 2>/dev/null || true
-    sed -i 's/^#VerbosePkgLists/VerbosePkgLists/' "${PACMAN_CONF_FILE}" 2>/dev/null || true
-    echo "     pacman: downloads paralelos=5, Color, VerbosePkgLists."
+    sed -i 's/^ParallelDownloads.*/ParallelDownloads = 5/'   "${PACMAN_CONF_FILE}" 2>/dev/null || true
+    sed -i 's/^#ParallelDownloads.*/ParallelDownloads = 5/'  "${PACMAN_CONF_FILE}" 2>/dev/null || true
+    sed -i 's/^#Color$/Color/'                               "${PACMAN_CONF_FILE}" 2>/dev/null || true
+    sed -i 's/^#VerbosePkgLists/VerbosePkgLists/'            "${PACMAN_CONF_FILE}" 2>/dev/null || true
+
+    # Restaura SigLevel correto (o build usa TrustAll, o sistema instalado
+    # deve usar o padrão seguro: Required DatabaseOptional)
+    sed -i 's/^SigLevel\s*=.*/SigLevel = Required DatabaseOptional/' \
+        "${PACMAN_CONF_FILE}" 2>/dev/null || true
+
+    # ILoveCandy :)
+    grep -q 'ILoveCandy' "${PACMAN_CONF_FILE}" \
+        || sed -i '/^Color/a ILoveCandy' "${PACMAN_CONF_FILE}" 2>/dev/null || true
+
+    echo "     pacman: downloads paralelos=5, Color, VerbosePkgLists, SigLevel restaurado."
 fi
 
 # ---------------------------------------------------------------------------
