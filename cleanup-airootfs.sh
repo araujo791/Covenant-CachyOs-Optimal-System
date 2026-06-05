@@ -462,9 +462,13 @@ if ls "${COVENANT_PKGS_DIR}"/linux-covenant-[0-9]*.pkg.tar.zst &>/dev/null 2>&1;
             || echo "     [!] Falha ao extrair: $(basename "${pkg}")"
     done
 
-    # Mostra o que foi extraído em /boot para debug
+    # Mostra o que foi extraído — debug completo
     echo "     Conteúdo de /boot após extração:"
     ls -la /boot/ 2>/dev/null || echo "     /boot vazio"
+    echo "     Procurando vmlinuz em todo o sistema:"
+    find / -name 'vmlinuz*' -not -path '/proc/*' -not -path '/sys/*' 2>/dev/null | head -10
+    echo "     Conteúdo de /usr/lib/modules/:"
+    ls /usr/lib/modules/ 2>/dev/null | head -5
 
     # Procura vmlinuz por qualquer nome possível
     VMLINUZ=""
