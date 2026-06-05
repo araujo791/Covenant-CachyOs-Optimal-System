@@ -1159,6 +1159,7 @@ if ls "${COVENANT_PKGS_DIR}"/linux-covenant-[0-9]*.pkg.tar.zst &>/dev/null 2>&1;
 #!/bin/bash
 # Covenant CachyOS — kernel setup (primeiro boot)
 PKGS_DIR="/root/covenant-pkgs"
+DONE_FILE="/var/lib/covenant/kernel-setup-done"
 LOG="/var/log/covenant-kernel-setup.log"
 exec > >(tee -a "${LOG}") 2>&1
 echo "[$(date)] covenant-kernel-setup iniciado"
@@ -1193,6 +1194,11 @@ if command -v grub-mkconfig &>/dev/null && [[ -d /boot/grub ]]; then
 fi
 
 rm -rf "${PKGS_DIR}" 2>/dev/null || true
+
+# Cria arquivo de marca — impede re-execução do serviço
+mkdir -p /var/lib/covenant
+touch "${DONE_FILE}"
+
 echo "[$(date)] covenant-kernel-setup concluído."
 systemctl disable covenant-kernel-setup.service 2>/dev/null || true
 KERNELSCRIPT
@@ -1204,7 +1210,7 @@ KERNELSCRIPT
 Description=Covenant CachyOS - Kernel Setup (primeiro boot)
 After=multi-user.target
 Before=display-manager.service
-ConditionPathExists=!/boot/vmlinuz-linux-covenant
+ConditionPathExists=!/var/lib/covenant/kernel-setup-done
 
 [Service]
 Type=oneshot
