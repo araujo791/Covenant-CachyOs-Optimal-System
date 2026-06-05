@@ -863,9 +863,180 @@ GRUBHOOK
 echo "     Hook pacman: grub-mkconfig automático após update de kernel instalado."
 echo "     Kernel cmdline: performance total configurado."
 
-# ===========================================================================
-# FIM DAS OTIMIZAÇÕES
-# ===========================================================================
+# ---------------------------------------------------------------------------
+# 17. Scheduler BORE — parâmetros para latência de desktop
+#     CachyOS usa kernel BORE (Burst-Oriented Response Enhancer).
+#     Os parâmetros abaixo reduzem latência de resposta para tarefas
+#     interativas (desktop, compilação paralela, áudio) sem sacrificar
+#     throughput nos 28 cores.
+# ---------------------------------------------------------------------------
+echo "  -> Configurando scheduler BORE/sched..."
+
+cat > /etc/sysctl.d/91-covenant-sched.conf << 'SCHED'
+# Covenant CachyOS — BORE scheduler tuning
+# Xeon E5-2680v4 (14c/28t Broadwell-EP)
+
+# Latência alvo do scheduler em ns (padrão: 6000000 = 6ms)
+# Reduzir melhora responsividade; 3ms é bom para desktop com 28 cores
+kernel.sched_latency_ns = 3000000
+
+# Granularidade mínima de execução (padrão: 750000 = 0.75ms)
+# Evita que tarefas sejam preemptadas muito cedo
+kernel.sched_min_granularity_ns = 500000
+
+# Wakeup granularity: quanto uma tarefa recém-acordada precisa "superar"
+# a tarefa atual para preemptar (padrão: 1000000 = 1ms)
+kernel.sched_wakeup_granularity_ns = 2000000
+
+# Migration cost: custo estimado de mover thread entre cores (ns)
+# Aumentar reduz migração desnecessária em Xeon com cache L3 grande
+kernel.sched_migration_cost_ns = 5000000
+
+# Autogroup: agrupa processos do mesmo terminal/sessão
+# Isola builds intensos (make -j28) do restante do desktop
+kernel.sched_autogroup_enabled = 1
+SCHED
+
+echo "     BORE/sched: latência de desktop configurada."
+
+# ---------------------------------------------------------------------------
+# 18. Coredump — desabilitado
+#     Coredumps consomem I/O e disco sem utilidade em desktop.
+#     Em caso de crash, o journald captura o backtrace via systemd-coredump.
+# ---------------------------------------------------------------------------
+echo "  -> Desabilitando coredumps..."
+
+mkdir -p /etc/systemd/coredump.conf.d
+cat > /etc/systemd/coredump.conf.d/covenant.conf << 'COREDUMP'
+[Coredump]
+Storage=none
+ProcessSizeMax=0
+COREDUMP
+
+# Também via limits.d (dupla proteção)
+cat >> /etc/security/limits.d/covenant.conf << 'CORELIMIT'
+*      soft  core     0
+*      hard  core     0
+CORELIMIT
+
+echo "     Coredumps desabilitados (storage=none + limits core=0)."
+
+# ---------------------------------------------------------------------------
+# 19. Hardware watchdog — desabilitado
+#     O watchdog de hardware (iTCO_wdt no Xeon) reinicia a máquina se o
+#     kernel travar por X segundos. Em desktop é desnecessário e consome
+#     um timer de hardware. Separado do NMI watchdog (já desabilitado no cmdline).
+# ---------------------------------------------------------------------------
+echo "  -> Desabilitando hardware watchdog..."
+
+mkdir -p /etc/systemd/system.conf.d
+cat > /etc/systemd/system.conf.d/covenant-watchdog.conf << 'HWWATCHDOG'
+[Manager]
+RuntimeWatchdogSec=off
+RebootWatchdogSec=off
+KExecWatchdogSec=off
+HWWATCHDOG
+
+# Blacklist o módulo iTCO_wdt (watchdog do Xeon/ICH)
+echo 'blacklist iTCO_wdt' >> /etc/modprobe.d/covenant-blacklist.conf
+echo 'blacklist iTCO_vendor_support' >> /etc/modprobe.d/covenant-blacklist.conf
+
+echo "     Hardware watchdog: desabilitado (iTCO_wdt blacklisted)."
+
+# ---------------------------------------------------------------------------
+# 20. AMDGPU — power profile forçado em high performance
+#     O ppfeaturemask já está no cmdline para habilitar overdrive.
+#     Aqui forçamos o DPM (Dynamic Power Management) profile para
+#     "high" via udev rule ao detectar o device AMDGPU.
+#     Sem isso, a RX 560 pode ficar em profile "auto" e não escalar
+#     clocks completamente sob carga.
+# ---------------------------------------------------------------------------
+echo "  -> Configurando AMDGPU power profile..."
+
+cat > /etc/udev/rules.d/61-amdgpu-performance.rules << 'AMDGPURULES'
+# Covenant CachyOS — AMDGPU performance profile
+# Força DPM power_dpm_force_performance_level=high para AMD RX 560
+
+# Perfil de performance: evita throttling no DPM da GPU
+SUBSYSTEM=="drm", KERNEL=="card[0-9]*", DRIVERS=="amdgpu", \
+    ATTR{device/power_dpm_force_performance_level}="high"
+
+# Método heurístico: liga ao detectar o device PCI da GPU
+ACTION=="add", SUBSYSTEM=="pci", ATTR{vendor}=="0x1002", \
+    ATTR{power/power_dpm_force_performance_level}="high"
+AMDGPURULES
+
+# Serviço de primeiro boot para garantir o profile após o driver carregar
+cat > /etc/systemd/system/covenant-amdgpu-perf.service << 'AMDGPUSVC'
+[Unit]
+Description=Covenant CachyOS - AMDGPU Performance Profile
+After=multi-user.target
+Wants=multi-user.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/bash -c '\
+  for card in /sys/class/drm/card[0-9]*/device; do \
+    if [[ -f "$card/power_dpm_force_performance_level" ]]; then \
+      echo "high" > "$card/power_dpm_force_performance_level" && \
+      echo "AMDGPU: $card -> high performance profile"; \
+    fi; \
+  done'
+ExecStop=/bin/bash -c '\
+  for card in /sys/class/drm/card[0-9]*/device; do \
+    [[ -f "$card/power_dpm_force_performance_level" ]] && \
+      echo "auto" > "$card/power_dpm_force_performance_level"; \
+  done'
+
+[Install]
+WantedBy=multi-user.target
+AMDGPUSVC
+
+systemctl enable covenant-amdgpu-perf.service 2>/dev/null \
+    && echo "     AMDGPU: power profile high habilitado (serviço + udev)." \
+    || echo "     AMDGPU: udev rule instalada (serviço ativo no primeiro boot)."
+
+# ---------------------------------------------------------------------------
+# 21. Hugepages estáticas — para JVM, browsers e compilação intensa
+#     Com 64GB RAM, reservar 1GB de hugepages (512 x 2MB) não tem custo
+#     perceptível. Aplicações como Java e compiladores alocam em hugepages
+#     automaticamente via libhugetlbfs ou madvise(), reduzindo TLB misses.
+# ---------------------------------------------------------------------------
+echo "  -> Configurando hugepages estáticas..."
+
+cat >> /etc/sysctl.d/91-covenant-sched.conf << 'HUGEPAGES'
+
+# Hugepages estáticas — 1GB reservado (512 x 2MB)
+# Reduce TLB pressure em workloads de compilação, JVM e browsers
+vm.nr_hugepages = 512
+# Hugepages movíveis: permite defrag sem reiniciar
+vm.hugepages_treat_as_movable = 1
+HUGEPAGES
+
+# Monta hugetlbfs
+if ! grep -q 'hugetlbfs' /etc/fstab 2>/dev/null; then
+    printf '\n# Covenant — hugetlbfs\nhugetlbfs\t/dev/hugepages\thugetlbfs\tdefaults\t0 0\n' >> /etc/fstab
+fi
+
+echo "     Hugepages: 512x2MB reservadas + hugetlbfs no fstab."
+
+# ---------------------------------------------------------------------------
+# 22. Módulos de kernel — pré-carregados no boot
+#     tcp_bbr já estava em modules-load.d.
+#     Adiciona módulos que melhoram performance e são carregados tarde:
+# ---------------------------------------------------------------------------
+echo "  -> Configurando módulos de boot..."
+
+cat >> /etc/modules-load.d/bbr.conf << 'MODULES'
+# Covenant — módulos adicionais
+dm_crypt       # desencriptação LUKS sem delay no boot
+msr            # acesso a MSRs (necessário para algumas ferramentas de CPU)
+cpuid          # informações de CPU para userspace
+coretemp       # sensores de temperatura dos cores (Xeon)
+MODULES
+
+echo "     Módulos: coretemp, msr, cpuid adicionados ao boot."
 
 echo ""
 echo "==> [LIMPEZA] Concluída."
@@ -888,6 +1059,12 @@ echo "    ✓ Limites: nofile=1M, nproc=131K"
 echo "    ✓ /tmp: tmpfs 8GB em RAM"
 echo "    ✓ pacman: downloads paralelos=5"
 echo "    ✓ Kernel cmdline: intel_pstate=disable, mitigations=off, nvme_core ps=0, THP=madvise, AMDGPU overdrive, pcie_aspm=off"
+echo "    ✓ BORE scheduler: latency_ns=3ms, migration_cost=5ms, autogroup=1"
+echo "    ✓ Coredumps: desabilitados (storage=none)"
+echo "    ✓ HW watchdog: desabilitado (iTCO_wdt blacklisted)"
+echo "    ✓ AMDGPU: power profile=high (udev + serviço)"
+echo "    ✓ Hugepages: 512x2MB estáticas + hugetlbfs"
+echo "    ✓ Módulos: coretemp, msr, cpuid no boot"
 CLEANUP
 
 chmod +x "${CLEANUP_SCRIPT}"
