@@ -438,34 +438,55 @@ coretemp
 EOF
 
 # --- 22. Kernel Covenant (serviço de primeiro boot) ---
-echo "  -> Kernel linux-covenant (serviço de primeiro boot)..."
+echo "  -> Kernel linux-covenant (instalação direta no airootfs)..."
 COVENANT_PKGS_DIR="/root/covenant-pkgs"
 
 if ls "${COVENANT_PKGS_DIR}"/linux-covenant-[0-9]*.pkg.tar.zst &>/dev/null 2>&1; then
 
-    # Garante que mkinitcpio está instalado antes de tentar instalar o kernel
-    # (o kernel depende de um provider de initramfs — forçamos mkinitcpio)
-    pacman -S --noconfirm --needed mkinitcpio mkinitcpio-busybox 2>/dev/null || true
+    # Instala via extração direta com bsdtar — sem pacman, sem keyring, sem prompts.
+    # O pacman -U falha no chroot porque:
+    #   1. Não tem as chaves do CachyOS para verificar dependências
+    #   2. O provider 'initramfs' tem 4 opções e pede confirmação interativa
+    # bsdtar extrai o conteúdo do .pkg.tar.zst diretamente para / como root faria.
+    KERNEL_OK=false
+    for pkg in "${COVENANT_PKGS_DIR}"/linux-covenant*.pkg.tar.zst; do
+        echo "     Extraindo: $(basename "${pkg}")..."
+        bsdtar -xf "${pkg}" -C / \
+            --exclude='.PKGINFO' \
+            --exclude='.INSTALL' \
+            --exclude='.MTREE' \
+            --exclude='.BUILDINFO' \
+            --exclude='.CHANGELOG' \
+            2>/dev/null && echo "     OK: $(basename "${pkg}")" || echo "     [!] Falha: $(basename "${pkg}")"
+    done
 
-    # Instala o kernel com --noconfirm e assume mkinitcpio como provider
-    # A opção --ask 4 aceita todas as perguntas automaticamente (providers, conflitos)
-    PACMAN_PROVIDER_ANSWER=1
-    echo "${PACMAN_PROVIDER_ANSWER}" | \
-    pacman -U --noconfirm --ask 4 --needed \
-        "${COVENANT_PKGS_DIR}"/linux-covenant-*.pkg.tar.zst 2>/dev/null \
-        && KERNEL_INSTALLED=true \
-        || KERNEL_INSTALLED=false
+    # Verifica se o vmlinuz foi extraído
+    if [[ -f /boot/vmlinuz-linux-covenant ]]; then
+        echo "     vmlinuz-linux-covenant: OK"
+        KERNEL_OK=true
+    else
+        echo "     [!] vmlinuz-linux-covenant não encontrado após extração"
+    fi
 
-    if [[ "${KERNEL_INSTALLED}" == "true" ]]; then
-        echo "     linux-covenant instalado no airootfs."
+    # Registra no banco do pacman para que o sistema saiba que está instalado
+    # (evita que pacman tente reinstalar ou remova como órfão)
+    PKGDB_DIR="/var/lib/pacman/local"
+    mkdir -p "${PKGDB_DIR}"
+    for pkg in "${COVENANT_PKGS_DIR}"/linux-covenant*.pkg.tar.zst; do
+        PKGNAME=$(bsdtar -xOf "${pkg}" .PKGINFO 2>/dev/null | grep '^pkgname' | cut -d' ' -f3)
+        PKGVER=$(bsdtar -xOf "${pkg}" .PKGINFO 2>/dev/null | grep '^pkgver' | cut -d' ' -f3)
+        if [[ -n "${PKGNAME}" && -n "${PKGVER}" ]]; then
+            ENTRY_DIR="${PKGDB_DIR}/${PKGNAME}-${PKGVER}"
+            mkdir -p "${ENTRY_DIR}"
+            bsdtar -xOf "${pkg}" .PKGINFO 2>/dev/null > "${ENTRY_DIR}/desc" || true
+            echo "     Registrado no pacman DB: ${PKGNAME}-${PKGVER}"
+        fi
+    done
 
-        # Gera initramfs explicitamente — necessário para o mkarchiso
-        # encontrar /boot/initramfs-linux-covenant.img
-        if command -v mkinitcpio &>/dev/null; then
-            echo "     Gerando initramfs..."
-            # Cria preset se não existir
-            if [[ ! -f /etc/mkinitcpio.d/linux-covenant.preset ]]; then
-                cat > /etc/mkinitcpio.d/linux-covenant.preset << 'PRESET'
+    if [[ "${KERNEL_OK}" == "true" ]]; then
+        # Gera initramfs — necessário para o mkarchiso encontrar initramfs-*.img
+        mkdir -p /etc/mkinitcpio.d
+        cat > /etc/mkinitcpio.d/linux-covenant.preset << 'PRESET'
 ALL_config="/etc/mkinitcpio.conf"
 ALL_kver="/boot/vmlinuz-linux-covenant"
 PRESETS=('default' 'fallback')
@@ -473,24 +494,26 @@ default_image="/boot/initramfs-linux-covenant.img"
 fallback_image="/boot/initramfs-linux-covenant-fallback.img"
 fallback_options="-S autodetect"
 PRESET
-            fi
+
+        echo "     Gerando initramfs..."
+        if command -v mkinitcpio &>/dev/null; then
             mkinitcpio -p linux-covenant 2>/dev/null \
-                && echo "     initramfs gerado: /boot/initramfs-linux-covenant.img" \
-                || echo "     [!] mkinitcpio falhou — tentando fallback..."
-
-            # Fallback: gera direto pelo kernel version
-            if [[ ! -f /boot/initramfs-linux-covenant.img ]]; then
-                KVER=$(ls /lib/modules/ | grep -i covenant | tail -1)
-                [[ -n "${KVER}" ]] && mkinitcpio -k "${KVER}" \
-                    -g /boot/initramfs-linux-covenant.img 2>/dev/null || true
-            fi
-
-            [[ -f /boot/initramfs-linux-covenant.img ]] \
-                && echo "     initramfs OK: $(ls -lh /boot/initramfs-linux-covenant.img | awk '{print $5}')" \
-                || echo "     [!] initramfs não gerado — kernel será configurado no 1º boot."
+                && echo "     initramfs: OK" \
+                || {
+                    # Fallback: detecta kver pelos módulos extraídos
+                    KVER=$(ls /lib/modules/ 2>/dev/null | grep -v 'extramodules' | tail -1)
+                    [[ -n "${KVER}" ]] \
+                        && mkinitcpio -k "${KVER}" -g /boot/initramfs-linux-covenant.img 2>/dev/null \
+                        && echo "     initramfs fallback: OK (${KVER})" \
+                        || echo "     [!] mkinitcpio falhou — kernel configurado no 1º boot."
+                }
+        else
+            echo "     [!] mkinitcpio não disponível no chroot — kernel configurado no 1º boot."
         fi
-    else
-        echo "     [!] Instalação no airootfs falhou — será feita no primeiro boot."
+
+        [[ -f /boot/initramfs-linux-covenant.img ]] \
+            && echo "     initramfs-linux-covenant.img: $(du -h /boot/initramfs-linux-covenant.img | cut -f1)" \
+            || echo "     [!] initramfs não gerado."
     fi
 
     cat > /usr/local/bin/covenant-kernel-setup.sh << 'EOF'
