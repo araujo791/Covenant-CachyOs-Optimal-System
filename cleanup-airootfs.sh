@@ -443,10 +443,55 @@ COVENANT_PKGS_DIR="/root/covenant-pkgs"
 
 if ls "${COVENANT_PKGS_DIR}"/linux-covenant-[0-9]*.pkg.tar.zst &>/dev/null 2>&1; then
 
-    pacman -U --noconfirm --needed \
+    # Garante que mkinitcpio está instalado antes de tentar instalar o kernel
+    # (o kernel depende de um provider de initramfs — forçamos mkinitcpio)
+    pacman -S --noconfirm --needed mkinitcpio mkinitcpio-busybox 2>/dev/null || true
+
+    # Instala o kernel com --noconfirm e assume mkinitcpio como provider
+    # A opção --ask 4 aceita todas as perguntas automaticamente (providers, conflitos)
+    PACMAN_PROVIDER_ANSWER=1
+    echo "${PACMAN_PROVIDER_ANSWER}" | \
+    pacman -U --noconfirm --ask 4 --needed \
         "${COVENANT_PKGS_DIR}"/linux-covenant-*.pkg.tar.zst 2>/dev/null \
-        && echo "     linux-covenant instalado no airootfs." \
-        || echo "     [!] Será instalado no primeiro boot."
+        && KERNEL_INSTALLED=true \
+        || KERNEL_INSTALLED=false
+
+    if [[ "${KERNEL_INSTALLED}" == "true" ]]; then
+        echo "     linux-covenant instalado no airootfs."
+
+        # Gera initramfs explicitamente — necessário para o mkarchiso
+        # encontrar /boot/initramfs-linux-covenant.img
+        if command -v mkinitcpio &>/dev/null; then
+            echo "     Gerando initramfs..."
+            # Cria preset se não existir
+            if [[ ! -f /etc/mkinitcpio.d/linux-covenant.preset ]]; then
+                cat > /etc/mkinitcpio.d/linux-covenant.preset << 'PRESET'
+ALL_config="/etc/mkinitcpio.conf"
+ALL_kver="/boot/vmlinuz-linux-covenant"
+PRESETS=('default' 'fallback')
+default_image="/boot/initramfs-linux-covenant.img"
+fallback_image="/boot/initramfs-linux-covenant-fallback.img"
+fallback_options="-S autodetect"
+PRESET
+            fi
+            mkinitcpio -p linux-covenant 2>/dev/null \
+                && echo "     initramfs gerado: /boot/initramfs-linux-covenant.img" \
+                || echo "     [!] mkinitcpio falhou — tentando fallback..."
+
+            # Fallback: gera direto pelo kernel version
+            if [[ ! -f /boot/initramfs-linux-covenant.img ]]; then
+                KVER=$(ls /lib/modules/ | grep -i covenant | tail -1)
+                [[ -n "${KVER}" ]] && mkinitcpio -k "${KVER}" \
+                    -g /boot/initramfs-linux-covenant.img 2>/dev/null || true
+            fi
+
+            [[ -f /boot/initramfs-linux-covenant.img ]] \
+                && echo "     initramfs OK: $(ls -lh /boot/initramfs-linux-covenant.img | awk '{print $5}')" \
+                || echo "     [!] initramfs não gerado — kernel será configurado no 1º boot."
+        fi
+    else
+        echo "     [!] Instalação no airootfs falhou — será feita no primeiro boot."
+    fi
 
     cat > /usr/local/bin/covenant-kernel-setup.sh << 'EOF'
 #!/bin/bash
