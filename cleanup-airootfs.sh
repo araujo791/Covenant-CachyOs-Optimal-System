@@ -72,6 +72,7 @@ Comment=Default Cursor Theme
 Inherits=Adwaita
 EOF
 
+mkdir -p /etc/skel/.config
 cat > /etc/skel/.config/kcminputrc << 'EOF'
 [Mouse]
 cursorTheme=Adwaita
@@ -124,6 +125,7 @@ echo 'tcp_bbr' > /etc/modules-load.d/covenant.conf
 
 # --- 3. zram ---
 echo "  -> zram..."
+mkdir -p /etc/systemd
 cat > /etc/systemd/zram-generator.conf << 'EOF'
 [zram0]
 zram-size = 8192
@@ -300,6 +302,7 @@ EOF
 
 # --- 13. Limites ---
 echo "  -> Limites de sistema..."
+mkdir -p /etc/security/limits.d
 cat > /etc/security/limits.d/covenant.conf << 'EOF'
 *      soft  nofile   524288
 *      hard  nofile   1048576
@@ -318,6 +321,7 @@ grep -q 'tmpfs.*/tmp' /etc/fstab 2>/dev/null \
 
 # --- 15. pacman.conf do sistema instalado ---
 echo "  -> pacman.conf..."
+mkdir -p /etc
 PACMAN_CONF_FILE="/etc/pacman.conf"
 if [[ -f "${PACMAN_CONF_FILE}" ]]; then
     sed -i 's/^#\?ParallelDownloads\s*=.*/ParallelDownloads = 5/' "${PACMAN_CONF_FILE}" || true
@@ -332,7 +336,7 @@ fi
 echo "  -> Kernel cmdline..."
 COVENANT_CMDLINE="intel_pstate=disable cpufreq.default_governor=performance nvme_core.default_ps_state=0 nvme_core.io_timeout=4294967295 mitigations=off nowatchdog nmi_watchdog=0 skew_tick=1 transparent_hugepage=madvise amdgpu.ppfeaturemask=0xffffffff pcie_aspm=off split_lock_detect=off iomem=relaxed quiet loglevel=3"
 
-mkdir -p /etc/default/grub.d /etc/kernel/cmdline.d
+mkdir -p /etc/default/grub.d /etc/kernel/cmdline.d /etc/pacman.d/hooks
 cat > /etc/default/grub.d/covenant-cmdline.cfg << EOF
 GRUB_CMDLINE_LINUX_DEFAULT="${COVENANT_CMDLINE}"
 EOF
@@ -360,6 +364,7 @@ EOF
 
 # --- 17. BORE scheduler ---
 echo "  -> BORE scheduler..."
+mkdir -p /etc/sysctl.d
 cat > /etc/sysctl.d/91-covenant-sched.conf << 'EOF'
 # Covenant CachyOS — BORE scheduler
 kernel.sched_latency_ns = 3000000
@@ -400,11 +405,13 @@ EOF
 
 # --- 20. AMDGPU power profile ---
 echo "  -> AMDGPU power profile..."
+mkdir -p /etc/udev/rules.d
 cat > /etc/udev/rules.d/61-amdgpu-performance.rules << 'EOF'
 SUBSYSTEM=="drm", KERNEL=="card[0-9]*", DRIVERS=="amdgpu", ATTR{device/power_dpm_force_performance_level}="high"
 ACTION=="add", SUBSYSTEM=="pci", ATTR{vendor}=="0x1002", ATTR{power/power_dpm_force_performance_level}="high"
 EOF
 
+mkdir -p /etc/systemd/system
 cat > /etc/systemd/system/covenant-amdgpu-perf.service << 'EOF'
 [Unit]
 Description=Covenant - AMDGPU Performance Profile
@@ -423,6 +430,7 @@ systemctl enable covenant-amdgpu-perf.service 2>/dev/null || true
 
 # --- 21. Módulos no boot ---
 echo "  -> Módulos..."
+mkdir -p /etc/modules-load.d
 cat >> /etc/modules-load.d/covenant.conf << 'EOF'
 msr
 cpuid
