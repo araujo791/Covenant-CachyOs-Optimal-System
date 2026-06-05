@@ -251,30 +251,65 @@ if [[ -n "${KERNEL_PKG}" ]]; then
     _log_ok "  kernel : $(basename "${KERNEL_PKG}")"
     [[ -n "${KERNEL_HDR}" ]] && _log_ok "  headers: $(basename "${KERNEL_HDR}")"
 else
-    # Compila na hora usando o covenant-build.sh do repo Covenant-CachyOS
+    # ---------------------------------------------------------------------------
+    # Compilação automática do kernel Covenant
+    #
+    # PROBLEMA: build-stock-iso.sh roda como root, mas makepkg recusa root.
+    # SOLUÇÃO:  detecta o usuário real que chamou sudo e compila como ele.
+    #           Se não houver usuário real (ex: root puro), cria um usuário
+    #           temporário "covenant-build" só para a compilação.
+    # ---------------------------------------------------------------------------
     _log_warn "Pacotes linux-covenant não encontrados em ${KERNEL_PKG_DIR}/"
-    _log_warn "Compilando kernel do zero (isso vai levar 1-3h)..."
+    _log_warn "Compilando kernel do zero (1-3h dependendo da máquina)..."
 
+    # Detecta usuário real por trás do sudo
+    BUILD_USER="${SUDO_USER:-}"
+    if [[ -z "${BUILD_USER}" || "${BUILD_USER}" == "root" ]]; then
+        # Cria usuário temporário para a compilação
+        BUILD_USER="covenant-build"
+        if ! id "${BUILD_USER}" &>/dev/null; then
+            useradd -m -s /bin/bash "${BUILD_USER}" \
+                || _log_fail "Não foi possível criar usuário temporário ${BUILD_USER}."
+            # Permite ao usuário temporário instalar dependências via pacman sem senha
+            echo "${BUILD_USER} ALL=(ALL) NOPASSWD: /usr/bin/pacman" \
+                >> /etc/sudoers.d/covenant-build-tmp
+        fi
+        CREATED_BUILD_USER=true
+    else
+        CREATED_BUILD_USER=false
+    fi
+
+    BUILD_HOME=$(getent passwd "${BUILD_USER}" | cut -d: -f6)
     COVENANT_KERNEL_REPO="https://github.com/araujo791/Covenant-CachyOS.git"
-    COVENANT_BUILD_TMP="/tmp/covenant-kernel-build"
+    COVENANT_BUILD_TMP="${BUILD_HOME}/covenant-kernel-build"
 
-    [[ -d "${COVENANT_BUILD_TMP}" ]] && rm -rf "${COVENANT_BUILD_TMP}"
-    git clone --depth=1 "${COVENANT_KERNEL_REPO}" "${COVENANT_BUILD_TMP}" \
-        || _log_fail "Falha ao clonar repositório do kernel Covenant."
+    _log_ok "Compilando como usuário: ${BUILD_USER}"
 
-    cd "${COVENANT_BUILD_TMP}"
-    bash covenant-build.sh \
-        || _log_fail "Falha na compilação do kernel Covenant."
+    # Clona o repositório do kernel como o usuário de build
+    sudo -u "${BUILD_USER}" bash -c "
+        set -e
+        [[ -d '${COVENANT_BUILD_TMP}' ]] && rm -rf '${COVENANT_BUILD_TMP}'
+        git clone --depth=1 '${COVENANT_KERNEL_REPO}' '${COVENANT_BUILD_TMP}'
+    " || _log_fail "Falha ao clonar repositório do kernel Covenant."
 
-    # Localiza os pacotes compilados
-    BUILD_PKGDIR="${HOME}/kernel-build/linux-cachyos/linux-cachyos"
+    # Roda o covenant-build.sh como usuário normal
+    # O script já tem seu próprio tratamento de sudo para pacman -S
+    sudo -u "${BUILD_USER}" bash -c "
+        set -e
+        cd '${COVENANT_BUILD_TMP}'
+        bash covenant-build.sh
+    " || _log_fail "Falha na compilação do kernel Covenant. Verifique os logs acima."
+
+    # Localiza os pacotes compilados (covenant-build.sh usa $HOME/kernel-build)
+    BUILD_PKGDIR="${BUILD_HOME}/kernel-build/linux-cachyos/linux-cachyos"
     KERNEL_PKG=$(ls -1 "${BUILD_PKGDIR}"/linux-covenant-[0-9]*.pkg.tar.zst 2>/dev/null \
         | grep -v headers | sort -V | tail -1)
     KERNEL_HDR=$(ls -1 "${BUILD_PKGDIR}"/linux-covenant-headers-[0-9]*.pkg.tar.zst 2>/dev/null \
         | sort -V | tail -1)
 
-    [[ -z "${KERNEL_PKG}" ]] && _log_fail "Compilação concluída mas pacote não encontrado."
+    [[ -z "${KERNEL_PKG}" ]] && _log_fail "Compilação concluída mas pacote não encontrado em ${BUILD_PKGDIR}."
 
+    # Copia para a ISO
     cp "${KERNEL_PKG}" "${AIROOTFS_PKGS}/"
     [[ -n "${KERNEL_HDR}" ]] && cp "${KERNEL_HDR}" "${AIROOTFS_PKGS}/"
 
@@ -282,8 +317,15 @@ else
     cp "${KERNEL_PKG}" "${KERNEL_PKG_DIR}/"
     [[ -n "${KERNEL_HDR}" ]] && cp "${KERNEL_HDR}" "${KERNEL_PKG_DIR}/"
 
+    # Limpa usuário temporário se foi criado
+    if [[ "${CREATED_BUILD_USER}" == "true" ]]; then
+        userdel -r "${BUILD_USER}" 2>/dev/null || true
+        rm -f /etc/sudoers.d/covenant-build-tmp
+        _log_ok "Usuário temporário ${BUILD_USER} removido."
+    fi
+
     cd "${SCRIPT_DIR}"
-    _log_ok "Kernel compilado e copiado:"
+    _log_ok "Kernel compilado e salvo para próximas builds:"
     _log_ok "  kernel : $(basename "${KERNEL_PKG}")"
     [[ -n "${KERNEL_HDR}" ]] && _log_ok "  headers: $(basename "${KERNEL_HDR}")"
 fi
