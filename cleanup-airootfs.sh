@@ -460,12 +460,41 @@ if ls "${COVENANT_PKGS_DIR}"/linux-covenant-[0-9]*.pkg.tar.zst &>/dev/null 2>&1;
             2>/dev/null && echo "     OK: $(basename "${pkg}")" || echo "     [!] Falha: $(basename "${pkg}")"
     done
 
-    # Verifica se o vmlinuz foi extraído
-    if [[ -f /boot/vmlinuz-linux-covenant ]]; then
-        echo "     vmlinuz-linux-covenant: OK"
+    # Verifica se o vmlinuz foi extraído — procura por qualquer nome possível
+    VMLINUZ=""
+    # Nomes possíveis em kernels CachyOS/Arch:
+    for candidate in \
+        /boot/vmlinuz-linux-covenant \
+        /boot/vmlinuz-linux-covenant-cachyos \
+        /boot/vmlinuz-7.*-covenant* \
+        /boot/vmlinuz-7.*covenant* \
+        /boot/vmlinuz-*covenant*; do
+        found=$(ls ${candidate} 2>/dev/null | head -1)
+        if [[ -n "${found}" ]]; then
+            VMLINUZ="${found}"
+            break
+        fi
+    done
+
+    # Fallback: qualquer vmlinuz novo em /boot
+    if [[ -z "${VMLINUZ}" ]]; then
+        VMLINUZ=$(ls -t /boot/vmlinuz* 2>/dev/null | head -1)
+    fi
+
+    if [[ -n "${VMLINUZ}" ]]; then
+        echo "     vmlinuz encontrado: ${VMLINUZ}"
         KERNEL_OK=true
+
+        # Cria symlink canônico se o nome for diferente do esperado
+        if [[ "${VMLINUZ}" != "/boot/vmlinuz-linux-covenant" ]]; then
+            ln -sf "${VMLINUZ}" /boot/vmlinuz-linux-covenant 2>/dev/null || true
+            echo "     Symlink: /boot/vmlinuz-linux-covenant → ${VMLINUZ}"
+        fi
     else
-        echo "     [!] vmlinuz-linux-covenant não encontrado após extração"
+        echo "     [!] vmlinuz não encontrado em /boot após extração"
+        echo "     Conteúdo de /boot:"
+        ls -la /boot/ 2>/dev/null || echo "     /boot vazio"
+        KERNEL_OK=false
     fi
 
     # Registra no banco do pacman para que o sistema saiba que está instalado
@@ -484,36 +513,37 @@ if ls "${COVENANT_PKGS_DIR}"/linux-covenant-[0-9]*.pkg.tar.zst &>/dev/null 2>&1;
     done
 
     if [[ "${KERNEL_OK}" == "true" ]]; then
-        # Gera initramfs — necessário para o mkarchiso encontrar initramfs-*.img
+        # Detecta a versão do kernel pelos módulos extraídos
+        KVER=$(ls /lib/modules/ 2>/dev/null | grep -v 'extramodules' \
+            | grep -E 'covenant|cachyos' | sort -V | tail -1)
+        [[ -z "${KVER}" ]] && KVER=$(ls /lib/modules/ 2>/dev/null | sort -V | tail -1)
+        echo "     Versão do kernel: ${KVER}"
+
+        # Gera initramfs — necessário para o mkarchiso
         mkdir -p /etc/mkinitcpio.d
-        cat > /etc/mkinitcpio.d/linux-covenant.preset << 'PRESET'
+        cat > /etc/mkinitcpio.d/linux-covenant.preset << PRESET
 ALL_config="/etc/mkinitcpio.conf"
-ALL_kver="/boot/vmlinuz-linux-covenant"
+ALL_kver="${VMLINUZ}"
 PRESETS=('default' 'fallback')
 default_image="/boot/initramfs-linux-covenant.img"
 fallback_image="/boot/initramfs-linux-covenant-fallback.img"
 fallback_options="-S autodetect"
 PRESET
 
-        echo "     Gerando initramfs..."
+        echo "     Gerando initramfs para ${KVER}..."
         if command -v mkinitcpio &>/dev/null; then
+            # Tenta pelo preset primeiro
             mkinitcpio -p linux-covenant 2>/dev/null \
-                && echo "     initramfs: OK" \
-                || {
-                    # Fallback: detecta kver pelos módulos extraídos
-                    KVER=$(ls /lib/modules/ 2>/dev/null | grep -v 'extramodules' | tail -1)
-                    [[ -n "${KVER}" ]] \
-                        && mkinitcpio -k "${KVER}" -g /boot/initramfs-linux-covenant.img 2>/dev/null \
-                        && echo "     initramfs fallback: OK (${KVER})" \
-                        || echo "     [!] mkinitcpio falhou — kernel configurado no 1º boot."
-                }
-        else
-            echo "     [!] mkinitcpio não disponível no chroot — kernel configurado no 1º boot."
+            || {
+                # Fallback: pela versão do kernel
+                [[ -n "${KVER}" ]] && \
+                mkinitcpio -k "${KVER}" -g /boot/initramfs-linux-covenant.img 2>/dev/null
+            }
         fi
 
         [[ -f /boot/initramfs-linux-covenant.img ]] \
             && echo "     initramfs-linux-covenant.img: $(du -h /boot/initramfs-linux-covenant.img | cut -f1)" \
-            || echo "     [!] initramfs não gerado."
+            || echo "     [!] initramfs não gerado — kernel configurado no 1º boot."
     fi
 
     cat > /usr/local/bin/covenant-kernel-setup.sh << 'EOF'
