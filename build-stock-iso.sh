@@ -229,9 +229,66 @@ _log_ok "Total de pacotes: ${total}"
 
 
 # ---------------------------------------------------------------------------
-# Limpeza do airootfs — remove ~1.2GB desnecessários antes do squashfs
-# Vilões identificados: fonts 559MB, locale 431MB, doc 227MB, icons 150MB
+# KERNEL COVENANT — inclui os pacotes pré-compilados na ISO
 # ---------------------------------------------------------------------------
+_log_step "Configurando kernel linux-covenant na ISO..."
+
+KERNEL_PKG_DIR="${SCRIPT_DIR}"
+AIROOTFS_PKGS="${ARCHISO}/airootfs/root/covenant-pkgs"
+mkdir -p "${AIROOTFS_PKGS}"
+
+# Localiza os .pkg.tar.zst do kernel Covenant na pasta do script
+KERNEL_PKG=$(ls -1 "${KERNEL_PKG_DIR}"/linux-covenant-[0-9]*.pkg.tar.zst 2>/dev/null \
+    | grep -v headers | sort -V | tail -1)
+KERNEL_HDR=$(ls -1 "${KERNEL_PKG_DIR}"/linux-covenant-headers-[0-9]*.pkg.tar.zst 2>/dev/null \
+    | sort -V | tail -1)
+
+if [[ -n "${KERNEL_PKG}" ]]; then
+    # Usa os pacotes pré-compilados
+    cp "${KERNEL_PKG}" "${AIROOTFS_PKGS}/"
+    [[ -n "${KERNEL_HDR}" ]] && cp "${KERNEL_HDR}" "${AIROOTFS_PKGS}/"
+    _log_ok "Kernel pré-compilado copiado para a ISO:"
+    _log_ok "  kernel : $(basename "${KERNEL_PKG}")"
+    [[ -n "${KERNEL_HDR}" ]] && _log_ok "  headers: $(basename "${KERNEL_HDR}")"
+else
+    # Compila na hora usando o covenant-build.sh do repo Covenant-CachyOS
+    _log_warn "Pacotes linux-covenant não encontrados em ${KERNEL_PKG_DIR}/"
+    _log_warn "Compilando kernel do zero (isso vai levar 1-3h)..."
+
+    COVENANT_KERNEL_REPO="https://github.com/araujo791/Covenant-CachyOS.git"
+    COVENANT_BUILD_TMP="/tmp/covenant-kernel-build"
+
+    [[ -d "${COVENANT_BUILD_TMP}" ]] && rm -rf "${COVENANT_BUILD_TMP}"
+    git clone --depth=1 "${COVENANT_KERNEL_REPO}" "${COVENANT_BUILD_TMP}" \
+        || _log_fail "Falha ao clonar repositório do kernel Covenant."
+
+    cd "${COVENANT_BUILD_TMP}"
+    bash covenant-build.sh \
+        || _log_fail "Falha na compilação do kernel Covenant."
+
+    # Localiza os pacotes compilados
+    BUILD_PKGDIR="${HOME}/kernel-build/linux-cachyos/linux-cachyos"
+    KERNEL_PKG=$(ls -1 "${BUILD_PKGDIR}"/linux-covenant-[0-9]*.pkg.tar.zst 2>/dev/null \
+        | grep -v headers | sort -V | tail -1)
+    KERNEL_HDR=$(ls -1 "${BUILD_PKGDIR}"/linux-covenant-headers-[0-9]*.pkg.tar.zst 2>/dev/null \
+        | sort -V | tail -1)
+
+    [[ -z "${KERNEL_PKG}" ]] && _log_fail "Compilação concluída mas pacote não encontrado."
+
+    cp "${KERNEL_PKG}" "${AIROOTFS_PKGS}/"
+    [[ -n "${KERNEL_HDR}" ]] && cp "${KERNEL_HDR}" "${AIROOTFS_PKGS}/"
+
+    # Salva cópia na pasta do script para próximas builds (evita recompilar)
+    cp "${KERNEL_PKG}" "${KERNEL_PKG_DIR}/"
+    [[ -n "${KERNEL_HDR}" ]] && cp "${KERNEL_HDR}" "${KERNEL_PKG_DIR}/"
+
+    cd "${SCRIPT_DIR}"
+    _log_ok "Kernel compilado e copiado:"
+    _log_ok "  kernel : $(basename "${KERNEL_PKG}")"
+    [[ -n "${KERNEL_HDR}" ]] && _log_ok "  headers: $(basename "${KERNEL_HDR}")"
+fi
+
+
 _log_step "Criando script de limpeza do airootfs..."
 
 CLEANUP_SCRIPT="${ARCHISO}/airootfs/root/cleanup-airootfs.sh"
@@ -1038,8 +1095,93 @@ MODULES
 
 echo "     Módulos: coretemp, msr, cpuid adicionados ao boot."
 
-echo ""
-echo "==> [LIMPEZA] Concluída."
+# ---------------------------------------------------------------------------
+# 23. Kernel Covenant — instala como padrão e configura GRUB
+#
+#     Os pacotes .pkg.tar.zst foram copiados para /root/covenant-pkgs/
+#     durante o build da ISO. Aqui são instalados no airootfs e um
+#     serviço de primeiro boot garante a instalação no sistema final.
+# ---------------------------------------------------------------------------
+echo "  -> Instalando kernel linux-covenant..."
+
+COVENANT_PKGS_DIR="/root/covenant-pkgs"
+
+if ls "${COVENANT_PKGS_DIR}"/linux-covenant-[0-9]*.pkg.tar.zst &>/dev/null 2>&1; then
+
+    pacman -U --noconfirm --needed \
+        "${COVENANT_PKGS_DIR}"/linux-covenant-*.pkg.tar.zst 2>/dev/null \
+        && echo "     linux-covenant instalado no airootfs." \
+        || echo "     [!] Instalação no airootfs falhou — será feita no primeiro boot."
+
+    cat > /usr/local/bin/covenant-kernel-setup.sh << 'KERNELSCRIPT'
+#!/bin/bash
+# Covenant CachyOS — kernel setup (primeiro boot)
+PKGS_DIR="/root/covenant-pkgs"
+LOG="/var/log/covenant-kernel-setup.log"
+exec > >(tee -a "${LOG}") 2>&1
+echo "[$(date)] covenant-kernel-setup iniciado"
+
+if ! pacman -Qi linux-covenant &>/dev/null; then
+    if ls "${PKGS_DIR}"/linux-covenant-[0-9]*.pkg.tar.zst &>/dev/null 2>&1; then
+        pacman -U --noconfirm "${PKGS_DIR}"/linux-covenant-*.pkg.tar.zst \
+            || { echo "[ERRO] Falha ao instalar linux-covenant"; exit 1; }
+    else
+        echo "[ERRO] Pacotes não encontrados em ${PKGS_DIR}"; exit 1
+    fi
+fi
+
+[[ -f /boot/vmlinuz-linux-covenant ]] \
+    || { echo "[ERRO] vmlinuz-linux-covenant não encontrado"; exit 1; }
+
+if pacman -Qi linux-cachyos &>/dev/null; then
+    pacman -R --noconfirm linux-cachyos linux-cachyos-headers 2>/dev/null \
+        && echo "linux-cachyos removido." \
+        || echo "[AVISO] Não foi possível remover linux-cachyos."
+fi
+
+mkinitcpio -p linux-covenant 2>/dev/null \
+    && echo "initramfs gerado." \
+    || echo "[AVISO] mkinitcpio falhou — usando initramfs existente."
+
+if command -v grub-mkconfig &>/dev/null && [[ -d /boot/grub ]]; then
+    grub-mkconfig -o /boot/grub/grub.cfg \
+        && sed -i 's/CachyOS Linux/Covenant-CachyOS/g' /boot/grub/grub.cfg \
+        && grub-set-default 0 \
+        && echo "GRUB atualizado → Covenant-CachyOS (default=0)."
+fi
+
+rm -rf "${PKGS_DIR}" 2>/dev/null || true
+echo "[$(date)] covenant-kernel-setup concluído."
+systemctl disable covenant-kernel-setup.service 2>/dev/null || true
+KERNELSCRIPT
+
+    chmod +x /usr/local/bin/covenant-kernel-setup.sh
+
+    cat > /etc/systemd/system/covenant-kernel-setup.service << 'KERNELSVC'
+[Unit]
+Description=Covenant CachyOS - Kernel Setup (primeiro boot)
+After=multi-user.target
+Before=display-manager.service
+ConditionPathExists=!/boot/vmlinuz-linux-covenant
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/covenant-kernel-setup.sh
+RemainAfterExit=no
+StandardOutput=journal+console
+StandardError=journal+console
+TimeoutStartSec=600
+
+[Install]
+WantedBy=multi-user.target
+KERNELSVC
+
+    systemctl enable covenant-kernel-setup.service 2>/dev/null \
+        && echo "     covenant-kernel-setup.service habilitado." \
+        || echo "     [!] Será habilitado no primeiro boot."
+else
+    echo "     [!] linux-covenant não encontrado em ${COVENANT_PKGS_DIR} — pulando."
+fi
 echo "    $(du -sh /usr/share 2>/dev/null | cut -f1) — /usr/share após limpeza"
 echo ""
 echo "==> [OTIMIZAÇÕES] Resumo aplicado:"
@@ -1065,6 +1207,7 @@ echo "    ✓ HW watchdog: desabilitado (iTCO_wdt blacklisted)"
 echo "    ✓ AMDGPU: power profile=high (udev + serviço)"
 echo "    ✓ Hugepages: 512x2MB estáticas + hugetlbfs"
 echo "    ✓ Módulos: coretemp, msr, cpuid no boot"
+echo "    ✓ Kernel: linux-covenant instalado como padrão (remove linux-cachyos no 1º boot)"
 CLEANUP
 
 chmod +x "${CLEANUP_SCRIPT}"
