@@ -160,7 +160,6 @@ cd "${SCRIPT_DIR}"
 # Variáveis de path
 # ---------------------------------------------------------------------------
 ARCHISO="${REPO_DIR}/archiso"
-PACKAGES="${ARCHISO}/packages.x86_64"
 PACMAN_CONF="${ARCHISO}/pacman.conf"
 UTIL_ISO="${REPO_DIR}/util-iso.sh"
 
@@ -284,44 +283,65 @@ if [[ -f "${PROFILEDEF}" ]]; then
 fi
 
 # ---------------------------------------------------------------------------
-# packages.x86_64 customizado
+# packages.x86_64 e packages_desktop.x86_64 customizados
 # ---------------------------------------------------------------------------
-_log_step "Aplicando packages.x86_64 customizado..."
+_log_step "Aplicando packages customizados..."
+
+PACKAGES="${ARCHISO}/packages.x86_64"
+PACKAGES_DESKTOP="${ARCHISO}/packages_desktop.x86_64"
+
+# Sobrescreve packages.x86_64 se tiver versão customizada
 if [[ -f "${SCRIPT_DIR}/packages.x86_64" ]]; then
     cp "${SCRIPT_DIR}/packages.x86_64" "${PACKAGES}"
     _log_ok "packages.x86_64 aplicado ($(wc -l < "${PACKAGES}") pacotes)."
-else
-    _log_warn "packages.x86_64 não encontrado — usando o do CachyOS."
 fi
 
-# Remove pacotes incompatíveis/desnecessários
-_log_step "Removendo pacotes incompatíveis..."
+# Sobrescreve packages_desktop.x86_64 se tiver versão customizada
+# Se não tiver, usa o do CachyOS mas limpa os pacotes problemáticos
+if [[ -f "${SCRIPT_DIR}/packages_desktop.x86_64" ]]; then
+    cp "${SCRIPT_DIR}/packages_desktop.x86_64" "${PACKAGES_DESKTOP}"
+    _log_ok "packages_desktop.x86_64 aplicado ($(wc -l < "${PACKAGES_DESKTOP}") pacotes)."
+fi
+
+# O build desktop usa packages_desktop.x86_64 — garante remoção dos problemáticos
+TARGET_FILES=("${PACKAGES}" "${PACKAGES_DESKTOP}")
+
+_log_step "Removendo pacotes incompatíveis de TODOS os arquivos de packages..."
 for pkg in "${HW_REMOVE_PKGS[@]}"; do
-    if grep -q "^${pkg}$" "${PACKAGES}" 2>/dev/null; then
-        sed -i "/^${pkg}$/d" "${PACKAGES}"
-        _log_ok "Removido: ${pkg}"
+    for f in "${TARGET_FILES[@]}"; do
+        [[ -f "${f}" ]] || continue
+        if grep -q "^${pkg}$" "${f}" 2>/dev/null; then
+            sed -i "/^${pkg}$/d" "${f}"
+            _log_ok "Removido de $(basename "${f}"): ${pkg}"
+        fi
+    done
+done
+
+# Resolve prompts interativos nos dois arquivos
+for f in "${TARGET_FILES[@]}"; do
+    [[ -f "${f}" ]] || continue
+
+    # iptables → iptables-nft
+    if grep -q '^iptables$' "${f}" 2>/dev/null; then
+        sed -i 's/^iptables$/iptables-nft/' "${f}"
+        _log_ok "$(basename "${f}"): iptables → iptables-nft"
+    fi
+    sed -i '/^iptables-legacy$/d' "${f}" 2>/dev/null || true
+
+    # qt6-multimedia → qt6-multimedia-ffmpeg
+    if grep -q '^qt6-multimedia$' "${f}" 2>/dev/null; then
+        sed -i 's/^qt6-multimedia$/qt6-multimedia-ffmpeg/' "${f}"
+        _log_ok "$(basename "${f}"): qt6-multimedia → qt6-multimedia-ffmpeg"
     fi
 done
 
-# Resolve pacotes que causam prompts interativos durante o build
-# iptables: substitui por iptables-nft (padrão moderno, sem prompt de escolha)
-if grep -q '^iptables$' "${PACKAGES}" 2>/dev/null; then
-    sed -i 's/^iptables$/iptables-nft/' "${PACKAGES}"
-    _log_ok "iptables → iptables-nft (sem prompt interativo)."
-fi
-sed -i '/^iptables-legacy$/d' "${PACKAGES}" 2>/dev/null || true
-
-# qt6-multimedia: escolhe ffmpeg explicitamente (sem prompt de provider)
-sed -i '/^qt6-multimedia$/d' "${PACKAGES}" 2>/dev/null || true
-grep -q '^qt6-multimedia-ffmpeg$' "${PACKAGES}" 2>/dev/null \
-    || echo 'qt6-multimedia-ffmpeg' >> "${PACKAGES}"
-_log_ok "qt6-multimedia-ffmpeg definido (sem prompt de provider)."
-
-# Garante pacotes de performance
+# Garante pacotes de performance no packages.x86_64
 for pkg in "${PERFORMANCE_PKGS[@]}"; do
     grep -q "^${pkg}$" "${PACKAGES}" 2>/dev/null || echo "${pkg}" >> "${PACKAGES}"
 done
-_log_ok "Packages finais: $(wc -l < "${PACKAGES}") pacotes."
+
+_log_ok "packages.x86_64        : $(wc -l < "${PACKAGES}") pacotes"
+[[ -f "${PACKAGES_DESKTOP}" ]] && _log_ok "packages_desktop.x86_64: $(wc -l < "${PACKAGES_DESKTOP}") pacotes"
 
 # ---------------------------------------------------------------------------
 # Kernel Covenant — copia ou compila
