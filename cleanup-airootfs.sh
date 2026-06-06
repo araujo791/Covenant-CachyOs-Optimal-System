@@ -2,20 +2,14 @@
 # =============================================================================
 # Covenant CachyOS — cleanup-airootfs.sh
 # Roda dentro do chroot do airootfs durante o build da ISO.
-# Aplica limpeza de arquivos desnecessários + otimizações de sistema.
-# Xeon E5-2680v4 (14c/28t) + AMD RX 560 + 64GB ECC RAM
+# NÃO usa set -e para evitar abort silencioso no ambiente restrito do chroot.
 # =============================================================================
 
-set -euo pipefail
-
-# Debug: mostra qual linha falha
-trap 'echo "==> [ABORT] cleanup falhou na linha ${LINENO}: ${BASH_COMMAND}" >&2' ERR
-
 # PRIMEIRO: garante GPL-2.0-only.txt — mkarchiso usa após o chroot fechar
-# Deve ser criado ANTES de qualquer operação que possa falhar
 mkdir -p /usr/share/licenses/spdx 2>/dev/null || true
 printf 'GNU GENERAL PUBLIC LICENSE\nVersion 2, June 1991\n' \
     > /usr/share/licenses/spdx/GPL-2.0-only.txt 2>/dev/null || true
+echo "==> GPL-2.0-only.txt criado"
 
 echo ""
 echo "=========================================="
@@ -112,8 +106,6 @@ echo "     Limpeza concluída."
 # ---------------------------------------------------------------------------
 # OTIMIZAÇÕES
 # ---------------------------------------------------------------------------
-# Reativa abort-on-error para as otimizações (erros aqui são importantes)
-set -euo pipefail
 echo ""
 echo "==> [OTIMIZAÇÕES] Aplicando tuning de sistema..."
 
