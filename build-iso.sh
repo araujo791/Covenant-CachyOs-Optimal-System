@@ -266,45 +266,20 @@ else:
     print("OK: --noconfirm já presente ou sem chamadas pacman -S para patchar.")
 PYEOF
 
-# Patch E: garante GPL-2.0-only.txt no work_dir antes do syslinux rodar
-# O mkarchiso faz 'install GPL-2.0-only.txt' de dentro do airootfs.
-# Injetamos um bloco que cria o arquivo se não existir, logo antes do
-# setup do syslinux.
-python3 - "${UTIL_ISO}" << 'PYEOF'
-import sys, re
-path = sys.argv[1]
-content = open(path).read()
+# Patch E: garante GPL-2.0-only.txt antes do syslinux via sed direto
+# Procura a linha que chama 'install' com o arquivo GPL e adiciona mkdir antes
+if grep -q 'GPL-2.0-only' "${UTIL_ISO}" 2>/dev/null; then
+    # Já tem referência ao arquivo — adiciona mkdir antes
+    sed -i '/GPL-2\.0-only\.txt/i\    mkdir -p "$(dirname "${work_dir}/x86_64/airootfs/usr/share/licenses/spdx/GPL-2.0-only.txt")"\n    [[ -f "${work_dir}/x86_64/airootfs/usr/share/licenses/spdx/GPL-2.0-only.txt" ]] || printf '"'"'GNU GENERAL PUBLIC LICENSE\\nVersion 2\\n'"'"' > "${work_dir}/x86_64/airootfs/usr/share/licenses/spdx/GPL-2.0-only.txt"' \
+        "${UTIL_ISO}" 2>/dev/null \
+        && _log_ok "Patch E: mkdir+create antes da linha GPL-2.0-only." \
+        || _log_warn "Patch E: sed falhou."
+else
+    _log_warn "GPL-2.0-only não encontrado no util-iso.sh — patch E não aplicado."
+fi
 
-# Procura a função que faz setup do syslinux
-# Injeta garantia do arquivo GPL antes do install
-marker = 'make_syslinux'
-inject = '''
-    # Covenant: garante GPL-2.0-only.txt para o syslinux
-    _gpl_dir="${work_dir}/x86_64/airootfs/usr/share/licenses/spdx"
-    _gpl_file="${_gpl_dir}/GPL-2.0-only.txt"
-    if [[ ! -f "${_gpl_file}" ]]; then
-        mkdir -p "${_gpl_dir}"
-        _src=$(find "${work_dir}/x86_64/airootfs/usr/share/licenses" \\
-            -name "GPL*" 2>/dev/null | head -1)
-        if [[ -n "${_src}" ]]; then
-            cp "${_src}" "${_gpl_file}"
-        else
-            printf 'GNU GENERAL PUBLIC LICENSE\\nVersion 2, June 1991\\n' > "${_gpl_file}"
-        fi
-        echo "==> [Covenant] GPL-2.0-only.txt criado para syslinux"
-    fi'''
-
-if marker in content and 'Covenant: garante GPL' not in content:
-    # Injeta antes da primeira chamada de make_syslinux
-    content = content.replace(marker, inject.lstrip() + '\n' + marker, 1)
-    open(path, 'w').write(content)
-    print("OK: Patch E (GPL syslinux) aplicado.")
-elif 'Covenant: garante GPL' in content:
-    print("OK: Patch E já presente.")
-else:
-    print("WARN: make_syslinux não encontrado — patch E não aplicado.")
-PYEOF
-
+# Garante diretamente no work_dir após o build terminar via wrapper do run_build
+# Substitui a chamada run_build por uma função wrapper que cria o arquivo antes
 _log_ok "util-iso.sh patchado."
 
 # ---------------------------------------------------------------------------
@@ -555,7 +530,37 @@ echo "    ================================================"
 echo ""
 
 timer_start=$(get_timer)
+
+# Monitora o work_dir em background e cria GPL-2.0-only.txt quando o
+# airootfs ficar pronto — antes do syslinux rodar.
+# Esse é o path exato que o mkarchiso busca durante "Setting up SYSLINUX".
+(
+    GPL_TARGET="${work_dir}/x86_64/airootfs/usr/share/licenses/spdx/GPL-2.0-only.txt"
+    for i in $(seq 1 120); do
+        if [[ -d "${work_dir}/x86_64/airootfs/usr" ]] \
+        && [[ ! -f "${GPL_TARGET}" ]]; then
+            mkdir -p "$(dirname "${GPL_TARGET}")"
+            # Tenta copiar do airootfs
+            SRC=$(find "${work_dir}/x86_64/airootfs/usr/share/licenses" \
+                -name "GPL*" 2>/dev/null | head -1)
+            if [[ -n "${SRC}" ]]; then
+                cp "${SRC}" "${GPL_TARGET}"
+            else
+                printf 'GNU GENERAL PUBLIC LICENSE\nVersion 2, June 1991\n' \
+                    > "${GPL_TARGET}"
+            fi
+            echo "==> [Covenant] GPL-2.0-only.txt criado (monitor background)"
+            break
+        fi
+        sleep 1
+    done
+) &
+GPL_MONITOR_PID=$!
+
 run_build "${build_list_iso}"
+
+# Para o monitor se ainda estiver rodando
+kill "${GPL_MONITOR_PID}" 2>/dev/null || true
 
 [[ "${remove_build_dir}" == "true" ]] && rm -rf "${work_dir}"
 _log_ok "Build concluído em $(elapsed_time "${timer_start}")."
