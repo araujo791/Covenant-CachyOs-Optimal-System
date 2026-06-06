@@ -336,7 +336,7 @@ for f in "${TARGET_FILES[@]}"; do
 done
 
 # Garante pacotes obrigatórios do mkarchiso nos dois arquivos
-REQUIRED_ISO_PKGS=(syslinux memtest86+ memtest86+-efi edk2-shell spdx-licenses)
+REQUIRED_ISO_PKGS=(syslinux memtest86+ memtest86+-efi edk2-shell)
 for pkg in "${REQUIRED_ISO_PKGS[@]}"; do
     for f in "${TARGET_FILES[@]}"; do
         [[ -f "${f}" ]] || continue

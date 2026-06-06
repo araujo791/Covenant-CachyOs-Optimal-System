@@ -25,11 +25,23 @@ find /usr/share/locale -mindepth 1 -maxdepth 1 -type d \
     -exec rm -rf {} + 2>/dev/null || true
 
 echo "  -> Documentação..."
-# Preserva licenças SPDX — necessárias para o syslinux durante o build da ISO
+# Preserva /usr/share/licenses intacto — syslinux precisa de GPL-2.0-only.txt
 find /usr/share/doc -mindepth 1 -maxdepth 1 -type d \
-    ! -name 'spdx' \
     -exec rm -rf {} + 2>/dev/null || true
 rm -rf /usr/share/info/* /usr/share/gtk-doc 2>/dev/null || true
+
+# Garante que o arquivo de licença GPL existe — necessário para syslinux BIOS
+mkdir -p /usr/share/licenses/spdx
+if [[ ! -f /usr/share/licenses/spdx/GPL-2.0-only.txt ]]; then
+    # Procura em outros locais comuns
+    found=$(find /usr/share/licenses /usr/share/common-licenses -name 'GPL*' 2>/dev/null | head -1)
+    if [[ -n "${found}" ]]; then
+        cp "${found}" /usr/share/licenses/spdx/GPL-2.0-only.txt
+    else
+        # Cria um placeholder mínimo
+        echo "GNU GENERAL PUBLIC LICENSE Version 2" > /usr/share/licenses/spdx/GPL-2.0-only.txt
+    fi
+fi
 
 echo "  -> Fontes CJK..."
 find /usr/share/fonts -mindepth 1 -maxdepth 1 -type d \
