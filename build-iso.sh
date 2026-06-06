@@ -290,10 +290,19 @@ PROFILEDEF="${ARCHISO}/profiledef.sh"
 if [[ -f "${PROFILEDEF}" ]]; then
     sed -i "s/^iso_name=.*/iso_name=\"${ISO_NAME_RAW}\"/"     "${PROFILEDEF}" 2>/dev/null || true
     sed -i "s/^iso_label=.*/iso_label=\"${ISO_NAME_SAFE^^}\"/" "${PROFILEDEF}" 2>/dev/null || true
+
+    # Remove bios.syslinux dos bootmodes — a máquina usa UEFI.
+    # O syslinux exige GPL-2.0-only.txt que causa falha no build.
+    # Boot UEFI via grub é suficiente e mais moderno.
+    sed -i "s/bootmodes=('bios.syslinux' 'uefi.grub')/bootmodes=('uefi.grub')/" \
+        "${PROFILEDEF}" 2>/dev/null || true
+    sed -i "s/bootmodes=('bios.syslinux' 'uefi.systemd-boot')/bootmodes=('uefi.systemd-boot')/" \
+        "${PROFILEDEF}" 2>/dev/null || true
+
     ISO_NAME_SAFE_R=$(grep '^iso_name=' "${PROFILEDEF}" | cut -d'"' -f2 \
         | tr '[:upper:]' '[:lower:]' | tr ' ' '-' | tr -cd 'a-z0-9-')
     [[ -n "${ISO_NAME_SAFE_R}" ]] && ISO_NAME_SAFE="${ISO_NAME_SAFE_R}"
-    _log_ok "ISO: '${ISO_NAME_RAW}' → arquivo: ${ISO_NAME_SAFE}-DATE-x86_64.iso"
+    _log_ok "ISO: '${ISO_NAME_RAW}' | bootmode: uefi.grub (sem bios.syslinux)"
 fi
 
 # ---------------------------------------------------------------------------
@@ -350,7 +359,7 @@ for f in "${TARGET_FILES[@]}"; do
 done
 
 # Garante pacotes obrigatórios do mkarchiso nos dois arquivos
-REQUIRED_ISO_PKGS=(syslinux memtest86+ memtest86+-efi edk2-shell licenses)
+REQUIRED_ISO_PKGS=(memtest86+-efi edk2-shell licenses)
 for pkg in "${REQUIRED_ISO_PKGS[@]}"; do
     for f in "${TARGET_FILES[@]}"; do
         [[ -f "${f}" ]] || continue
