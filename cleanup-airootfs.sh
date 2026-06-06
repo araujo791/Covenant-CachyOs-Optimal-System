@@ -437,118 +437,14 @@ cpuid
 coretemp
 EOF
 
-# --- 22. Kernel Covenant (serviço de primeiro boot) ---
-echo "  -> Kernel linux-covenant (instalação direta no airootfs)..."
+# --- 22. Kernel Covenant — serviço de primeiro boot ---
+# A live ISO usa o kernel linux-cachyos padrão do CachyOS.
+# O linux-covenant fica nos .pkg.tar.zst em /root/covenant-pkgs/
+# e é instalado no sistema REAL pelo serviço abaixo no primeiro boot.
+echo "  -> Kernel linux-covenant (configurando serviço de primeiro boot)..."
 COVENANT_PKGS_DIR="/root/covenant-pkgs"
 
 if ls "${COVENANT_PKGS_DIR}"/linux-covenant-[0-9]*.pkg.tar.zst &>/dev/null 2>&1; then
-
-    # Desabilita abort-on-error — erros tratados manualmente nesta seção
-    set +e
-
-    # Instala via tar direto — sem pacman, sem keyring, sem prompts
-    # O chroot do build não tem bsdtar disponível, usa GNU tar
-    KERNEL_OK=false
-    for pkg in "${COVENANT_PKGS_DIR}"/linux-covenant*.pkg.tar.zst; do
-        echo "     Extraindo: $(basename "${pkg}")..."
-        tar -xf "${pkg}" -C / \
-            --exclude='.PKGINFO' \
-            --exclude='.INSTALL' \
-            --exclude='.MTREE' \
-            --exclude='.BUILDINFO' \
-            --exclude='.CHANGELOG' \
-            2>/dev/null \
-            && echo "     OK: $(basename "${pkg}")" \
-            || echo "     [!] Falha ao extrair: $(basename "${pkg}")"
-    done
-
-    # Mostra o que foi extraído — debug completo
-    echo "     Conteúdo de /boot após extração:"
-    ls -la /boot/ 2>/dev/null || echo "     /boot vazio"
-    echo "     Procurando vmlinuz em todo o sistema:"
-    find / -name 'vmlinuz*' -not -path '/proc/*' -not -path '/sys/*' 2>/dev/null | head -10
-    echo "     Conteúdo de /usr/lib/modules/:"
-    ls /usr/lib/modules/ 2>/dev/null | head -5
-
-    # Procura vmlinuz por qualquer nome possível
-    VMLINUZ=""
-    for candidate in \
-        /boot/vmlinuz-linux-covenant \
-        /boot/vmlinuz-linux-covenant-cachyos \
-        /boot/vmlinuz-*covenant* \
-        /boot/vmlinuz-*cachyos*; do
-        found=$(ls ${candidate} 2>/dev/null | head -1)
-        if [[ -n "${found}" ]]; then
-            VMLINUZ="${found}"
-            break
-        fi
-    done
-
-    # Fallback: vmlinuz mais recente em /boot
-    if [[ -z "${VMLINUZ}" ]]; then
-        VMLINUZ=$(ls -t /boot/vmlinuz* 2>/dev/null | grep -v 'linux-cachyos$' | head -1)
-    fi
-
-    if [[ -n "${VMLINUZ}" ]]; then
-        echo "     vmlinuz: ${VMLINUZ}"
-        KERNEL_OK=true
-        # Symlink canônico para scripts que esperam nome fixo
-        [[ "${VMLINUZ}" != "/boot/vmlinuz-linux-covenant" ]] && \
-            ln -sf "${VMLINUZ}" /boot/vmlinuz-linux-covenant 2>/dev/null && \
-            echo "     Symlink criado: /boot/vmlinuz-linux-covenant"
-    else
-        echo "     [!] vmlinuz não encontrado — kernel configurado no 1º boot."
-        KERNEL_OK=false
-    fi
-
-    # Registra no DB do pacman via tar (sem bsdtar)
-    PKGDB_DIR="/var/lib/pacman/local"
-    mkdir -p "${PKGDB_DIR}"
-    for pkg in "${COVENANT_PKGS_DIR}"/linux-covenant*.pkg.tar.zst; do
-        PKGINFO=$(tar -xOf "${pkg}" .PKGINFO 2>/dev/null)
-        PKGNAME=$(echo "${PKGINFO}" | grep '^pkgname' | awk '{print $3}')
-        PKGVER=$(echo "${PKGINFO}" | grep '^pkgver' | awk '{print $3}')
-        if [[ -n "${PKGNAME}" && -n "${PKGVER}" ]]; then
-            ENTRY_DIR="${PKGDB_DIR}/${PKGNAME}-${PKGVER}"
-            mkdir -p "${ENTRY_DIR}"
-            echo "${PKGINFO}" > "${ENTRY_DIR}/desc"
-            echo "     Registrado no pacman DB: ${PKGNAME}-${PKGVER}"
-        fi
-    done
-
-    if [[ "${KERNEL_OK}" == "true" ]]; then
-        # Detecta a versão do kernel pelos módulos extraídos
-        KVER=$(ls /lib/modules/ 2>/dev/null | grep -v 'extramodules' \
-            | grep -E 'covenant|cachyos' | sort -V | tail -1)
-        [[ -z "${KVER}" ]] && KVER=$(ls /lib/modules/ 2>/dev/null | sort -V | tail -1)
-        echo "     Versão do kernel: ${KVER}"
-
-        # Gera initramfs — necessário para o mkarchiso
-        mkdir -p /etc/mkinitcpio.d
-        cat > /etc/mkinitcpio.d/linux-covenant.preset << PRESET
-ALL_config="/etc/mkinitcpio.conf"
-ALL_kver="${VMLINUZ}"
-PRESETS=('default' 'fallback')
-default_image="/boot/initramfs-linux-covenant.img"
-fallback_image="/boot/initramfs-linux-covenant-fallback.img"
-fallback_options="-S autodetect"
-PRESET
-
-        echo "     Gerando initramfs para ${KVER}..."
-        if command -v mkinitcpio &>/dev/null; then
-            # Tenta pelo preset primeiro
-            mkinitcpio -p linux-covenant 2>/dev/null \
-            || {
-                # Fallback: pela versão do kernel
-                [[ -n "${KVER}" ]] && \
-                mkinitcpio -k "${KVER}" -g /boot/initramfs-linux-covenant.img 2>/dev/null
-            }
-        fi
-
-        [[ -f /boot/initramfs-linux-covenant.img ]] \
-            && echo "     initramfs-linux-covenant.img: $(du -h /boot/initramfs-linux-covenant.img | cut -f1)" \
-            || echo "     [!] initramfs não gerado — kernel configurado no 1º boot."
-    fi
 
     cat > /usr/local/bin/covenant-kernel-setup.sh << 'EOF'
 #!/bin/bash
@@ -558,31 +454,38 @@ LOG="/var/log/covenant-kernel-setup.log"
 exec > >(tee -a "${LOG}") 2>&1
 echo "[$(date)] covenant-kernel-setup iniciado"
 
+# Instala linux-covenant se ainda não estiver presente
 if ! pacman -Qi linux-covenant &>/dev/null; then
-    ls "${PKGS_DIR}"/linux-covenant-[0-9]*.pkg.tar.zst &>/dev/null \
-        || { echo "[ERRO] Pacotes não encontrados"; exit 1; }
-    pacman -U --noconfirm "${PKGS_DIR}"/linux-covenant-*.pkg.tar.zst \
-        || { echo "[ERRO] Falha ao instalar linux-covenant"; exit 1; }
+    ls "${PKGS_DIR}"/linux-covenant-[0-9]*.pkg.tar.zst &>/dev/null         || { echo "[ERRO] Pacotes não encontrados em ${PKGS_DIR}"; exit 1; }
+    pacman -U --noconfirm "${PKGS_DIR}"/linux-covenant-*.pkg.tar.zst         || { echo "[ERRO] Falha ao instalar linux-covenant"; exit 1; }
+    echo "linux-covenant instalado."
 fi
 
-[[ -f /boot/vmlinuz-linux-covenant ]] || { echo "[ERRO] vmlinuz não encontrado"; exit 1; }
+# Verifica que o vmlinuz foi criado pelo pacman
+VMLINUZ=$(ls /boot/vmlinuz-linux-covenant* /usr/lib/modules/*/vmlinuz 2>/dev/null | head -1)
+[[ -z "${VMLINUZ}" ]] && { echo "[ERRO] vmlinuz não encontrado após instalação"; exit 1; }
+echo "vmlinuz: ${VMLINUZ}"
 
-pacman -Qi linux-cachyos &>/dev/null \
-    && pacman -R --noconfirm linux-cachyos linux-cachyos-headers 2>/dev/null \
-    && echo "linux-cachyos removido." || true
+# Remove linux-cachyos do sistema instalado
+if pacman -Qi linux-cachyos &>/dev/null; then
+    pacman -R --noconfirm linux-cachyos linux-cachyos-headers 2>/dev/null         && echo "linux-cachyos removido." || echo "[AVISO] Não foi possível remover linux-cachyos."
+fi
 
-mkinitcpio -p linux-covenant 2>/dev/null && echo "initramfs gerado." || true
+# Gera initramfs
+mkinitcpio -p linux-covenant 2>/dev/null     && echo "initramfs gerado."     || echo "[AVISO] mkinitcpio falhou — boot pode precisar de ajuste."
 
+# Atualiza GRUB
 if command -v grub-mkconfig &>/dev/null && [[ -d /boot/grub ]]; then
     grub-mkconfig -o /boot/grub/grub.cfg
     sed -i 's/CachyOS Linux/Covenant-CachyOS/g' /boot/grub/grub.cfg
     grub-set-default 0
-    echo "GRUB atualizado → Covenant-CachyOS"
+    echo "GRUB atualizado → Covenant-CachyOS (default=0)."
 fi
 
+# Limpa pkgs e marca como concluído
 rm -rf "${PKGS_DIR}" 2>/dev/null || true
 mkdir -p /var/lib/covenant && touch "${DONE_FILE}"
-echo "[$(date)] Concluído."
+echo "[$(date)] covenant-kernel-setup concluído."
 systemctl disable covenant-kernel-setup.service 2>/dev/null || true
 EOF
     chmod +x /usr/local/bin/covenant-kernel-setup.sh
@@ -606,11 +509,15 @@ TimeoutStartSec=600
 WantedBy=multi-user.target
 EOF
     systemctl enable covenant-kernel-setup.service 2>/dev/null || true
-    echo "     covenant-kernel-setup.service habilitado."
+    echo "     covenant-kernel-setup.service habilitado (roda no 1º boot do sistema instalado)."
+    echo "     Pacotes em ${COVENANT_PKGS_DIR}:"
+    ls "${COVENANT_PKGS_DIR}"/*.pkg.tar.zst 2>/dev/null | while read f; do
+        echo "       - $(basename "${f}")"
+    done
 else
-    echo "     [!] Pacotes linux-covenant não encontrados em ${COVENANT_PKGS_DIR}"
+    echo "     [!] Pacotes linux-covenant não encontrados — kernel não será instalado no 1º boot."
+    echo "         Coloque os .pkg.tar.zst na pasta do build-iso.sh antes de rodar o build."
 fi
-
 # ---------------------------------------------------------------------------
 # Resumo
 # ---------------------------------------------------------------------------
