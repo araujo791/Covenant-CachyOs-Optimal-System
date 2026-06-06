@@ -25,7 +25,11 @@ find /usr/share/locale -mindepth 1 -maxdepth 1 -type d \
     -exec rm -rf {} + 2>/dev/null || true
 
 echo "  -> Documentação..."
-rm -rf /usr/share/doc/* /usr/share/info/* /usr/share/gtk-doc 2>/dev/null || true
+# Preserva licenças SPDX — necessárias para o syslinux durante o build da ISO
+find /usr/share/doc -mindepth 1 -maxdepth 1 -type d \
+    ! -name 'spdx' \
+    -exec rm -rf {} + 2>/dev/null || true
+rm -rf /usr/share/info/* /usr/share/gtk-doc 2>/dev/null || true
 
 echo "  -> Fontes CJK..."
 find /usr/share/fonts -mindepth 1 -maxdepth 1 -type d \
