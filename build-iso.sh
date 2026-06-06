@@ -345,6 +345,18 @@ for pkg in "${REQUIRED_ISO_PKGS[@]}"; do
 done
 _log_ok "Pacotes obrigatórios do mkarchiso garantidos (syslinux, memtest, edk2-shell)."
 
+# Garante kernel linux-cachyos no packages_desktop.x86_64
+# O mkarchiso PRECISA do vmlinuz-linux-cachyos para gerar a ISO.
+# O linux-covenant é instalado apenas no sistema final (1º boot).
+for f in "${TARGET_FILES[@]}"; do
+    [[ -f "${f}" ]] || continue
+    grep -q "^linux-cachyos$" "${f}" 2>/dev/null \
+        || echo "linux-cachyos" >> "${f}"
+    grep -q "^linux-cachyos-headers$" "${f}" 2>/dev/null \
+        || echo "linux-cachyos-headers" >> "${f}"
+done
+_log_ok "linux-cachyos garantido em todos os arquivos de packages (kernel da live ISO)."
+
 # Garante pacotes de performance no packages.x86_64
 for pkg in "${PERFORMANCE_PKGS[@]}"; do
     grep -q "^${pkg}$" "${PACKAGES}" 2>/dev/null || echo "${pkg}" >> "${PACKAGES}"
