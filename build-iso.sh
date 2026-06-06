@@ -215,7 +215,7 @@ else:
     print("WARN: fetch_cachyos_mirrorlist não encontrada.")
 PYEOF
 
-# Patch B: SigLevel=Never no work_dir após cp -r archiso
+# Patch B: SigLevel=Never no work_dir após cp -r archiso + GPL-2.0-only.txt
 python3 - "${UTIL_ISO}" << 'PYEOF'
 import sys
 path = sys.argv[1]
@@ -228,13 +228,33 @@ inject = '''
         sed -i 's/^SigLevel\\s*=.*/SigLevel = Never/' "${_wpc}"
         grep -q '^LocalFileSigLevel' "${_wpc}" || echo 'LocalFileSigLevel = Never' >> "${_wpc}"
         echo "==> [Covenant] SigLevel=Never em ${_wpc}"
-    fi'''
+    fi
+
+    # Covenant: GPL-2.0-only.txt no airootfs copiado — necessário para syslinux
+    # O mkarchiso procura esse arquivo em x86_64/airootfs durante Setting up SYSLINUX
+    _gpl="${work_dir}/archiso/airootfs/usr/share/licenses/spdx/GPL-2.0-only.txt"
+    mkdir -p "$(dirname "${_gpl}")"
+    [[ -f "${_gpl}" ]] || printf 'GNU GENERAL PUBLIC LICENSE\\nVersion 2, June 1991\\n' > "${_gpl}"
+    echo "==> [Covenant] GPL-2.0-only.txt criado em airootfs"'''
 if marker in content and 'Covenant: SigLevel' not in content:
     content = content.replace(marker, marker + inject)
     open(path, 'w').write(content)
-    print("OK: SigLevel patch injetado após cp -r.")
+    print("OK: SigLevel + GPL patch injetados após cp -r.")
 elif 'Covenant: SigLevel' in content:
-    print("OK: SigLevel patch já presente.")
+    # Já tem o patch — adiciona GPL se não estiver
+    if 'GPL-2.0-only' not in content:
+        gpl_inject = '''
+    # Covenant: GPL-2.0-only.txt no airootfs copiado
+    _gpl="${work_dir}/archiso/airootfs/usr/share/licenses/spdx/GPL-2.0-only.txt"
+    mkdir -p "$(dirname "${_gpl}")"
+    [[ -f "${_gpl}" ]] || printf 'GNU GENERAL PUBLIC LICENSE\\nVersion 2\\n' > "${_gpl}"
+    echo "==> [Covenant] GPL-2.0-only.txt criado"'''
+        content = content.replace('echo "==> [Covenant] SigLevel=Never em ${_wpc}"\n    fi',
+            'echo "==> [Covenant] SigLevel=Never em ${_wpc}"\n    fi' + gpl_inject)
+        open(path, 'w').write(content)
+        print("OK: GPL patch adicionado ao bloco existente.")
+    else:
+        print("OK: SigLevel e GPL já presentes.")
 else:
     print("WARN: marcador 'cp -r archiso' não encontrado.")
 PYEOF
