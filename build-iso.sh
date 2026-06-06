@@ -266,6 +266,45 @@ else:
     print("OK: --noconfirm já presente ou sem chamadas pacman -S para patchar.")
 PYEOF
 
+# Patch E: garante GPL-2.0-only.txt no work_dir antes do syslinux rodar
+# O mkarchiso faz 'install GPL-2.0-only.txt' de dentro do airootfs.
+# Injetamos um bloco que cria o arquivo se não existir, logo antes do
+# setup do syslinux.
+python3 - "${UTIL_ISO}" << 'PYEOF'
+import sys, re
+path = sys.argv[1]
+content = open(path).read()
+
+# Procura a função que faz setup do syslinux
+# Injeta garantia do arquivo GPL antes do install
+marker = 'make_syslinux'
+inject = '''
+    # Covenant: garante GPL-2.0-only.txt para o syslinux
+    _gpl_dir="${work_dir}/x86_64/airootfs/usr/share/licenses/spdx"
+    _gpl_file="${_gpl_dir}/GPL-2.0-only.txt"
+    if [[ ! -f "${_gpl_file}" ]]; then
+        mkdir -p "${_gpl_dir}"
+        _src=$(find "${work_dir}/x86_64/airootfs/usr/share/licenses" \\
+            -name "GPL*" 2>/dev/null | head -1)
+        if [[ -n "${_src}" ]]; then
+            cp "${_src}" "${_gpl_file}"
+        else
+            printf 'GNU GENERAL PUBLIC LICENSE\\nVersion 2, June 1991\\n' > "${_gpl_file}"
+        fi
+        echo "==> [Covenant] GPL-2.0-only.txt criado para syslinux"
+    fi'''
+
+if marker in content and 'Covenant: garante GPL' not in content:
+    # Injeta antes da primeira chamada de make_syslinux
+    content = content.replace(marker, inject.lstrip() + '\n' + marker, 1)
+    open(path, 'w').write(content)
+    print("OK: Patch E (GPL syslinux) aplicado.")
+elif 'Covenant: garante GPL' in content:
+    print("OK: Patch E já presente.")
+else:
+    print("WARN: make_syslinux não encontrado — patch E não aplicado.")
+PYEOF
+
 _log_ok "util-iso.sh patchado."
 
 # ---------------------------------------------------------------------------
@@ -336,7 +375,7 @@ for f in "${TARGET_FILES[@]}"; do
 done
 
 # Garante pacotes obrigatórios do mkarchiso nos dois arquivos
-REQUIRED_ISO_PKGS=(syslinux memtest86+ memtest86+-efi edk2-shell)
+REQUIRED_ISO_PKGS=(syslinux memtest86+ memtest86+-efi edk2-shell licenses)
 for pkg in "${REQUIRED_ISO_PKGS[@]}"; do
     for f in "${TARGET_FILES[@]}"; do
         [[ -f "${f}" ]] || continue
