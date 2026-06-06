@@ -36,18 +36,12 @@ echo "  -> Documentação..."
     rm -rf /usr/share/info/* /usr/share/gtk-doc 2>/dev/null
 ) || true
 
-# Garante que o arquivo de licença GPL existe — necessário para syslinux BIOS
+# CRÍTICO: GPL-2.0-only.txt — mkarchiso linha 487 usa este arquivo de
+# ${pacstrap_dir}/usr/share/licenses/spdx/ durante "Setting up SYSLINUX".
+# Sempre recria incondicionalmente para garantir presença.
 mkdir -p /usr/share/licenses/spdx
-if [[ ! -f /usr/share/licenses/spdx/GPL-2.0-only.txt ]]; then
-    found=$(find /usr/share/licenses /usr/share/common-licenses \
-        -name 'GPL*' 2>/dev/null | head -1)
-    if [[ -n "${found}" ]]; then
-        cp "${found}" /usr/share/licenses/spdx/GPL-2.0-only.txt
-    else
-        echo "GNU GENERAL PUBLIC LICENSE Version 2" \
-            > /usr/share/licenses/spdx/GPL-2.0-only.txt
-    fi
-fi
+printf 'GNU GENERAL PUBLIC LICENSE\nVersion 2, June 1991\n'     > /usr/share/licenses/spdx/GPL-2.0-only.txt
+echo "     GPL-2.0-only.txt: criado ($(wc -c < /usr/share/licenses/spdx/GPL-2.0-only.txt) bytes)"
 
 echo "  -> Fontes CJK..."
 find /usr/share/fonts -mindepth 1 -maxdepth 1 -type d \
