@@ -436,33 +436,6 @@ done
 _log_ok "packages.x86_64        : $(wc -l < "${PACKAGES}") pacotes"
 [[ -f "${PACKAGES_DESKTOP}" ]] && _log_ok "packages_desktop.x86_64: $(wc -l < "${PACKAGES_DESKTOP}") pacotes"
 
-# ---------------------------------------------------------------------------
-# Garante GPL-2.0-only.txt no airootfs — necessário para syslinux BIOS
-# O util-iso.sh copia esse arquivo de dentro do airootfs para a ISO.
-# O pacote 'licenses' instala em /usr/share/licenses/spdx/ mas às vezes
-# não está presente. Criamos preventivamente.
-# ---------------------------------------------------------------------------
-_log_step "Garantindo licença GPL para syslinux..."
-SPDX_DIR="${ARCHISO}/airootfs/usr/share/licenses/spdx"
-mkdir -p "${SPDX_DIR}"
-if [[ ! -f "${SPDX_DIR}/GPL-2.0-only.txt" ]]; then
-    # Tenta copiar do sistema host
-    HOST_GPL=$(find /usr/share/licenses /usr/share/common-licenses \
-        -name 'GPL-2*' -o -name 'GPL2*' 2>/dev/null | head -1)
-    if [[ -n "${HOST_GPL}" ]]; then
-        cp "${HOST_GPL}" "${SPDX_DIR}/GPL-2.0-only.txt"
-        _log_ok "GPL-2.0-only.txt copiado do host: ${HOST_GPL}"
-    else
-        # Cria placeholder — o syslinux só precisa que o arquivo exista
-        printf 'GNU GENERAL PUBLIC LICENSE\nVersion 2, June 1991\n' \
-            > "${SPDX_DIR}/GPL-2.0-only.txt"
-        _log_ok "GPL-2.0-only.txt criado (placeholder)."
-    fi
-else
-    _log_ok "GPL-2.0-only.txt já existe no airootfs."
-fi
-
-
 _log_step "Configurando kernel linux-covenant..."
 AIROOTFS_PKGS="${ARCHISO}/airootfs/root/covenant-pkgs"
 mkdir -p "${AIROOTFS_PKGS}"
