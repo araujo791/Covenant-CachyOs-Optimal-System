@@ -215,48 +215,37 @@ else:
     print("WARN: fetch_cachyos_mirrorlist não encontrada.")
 PYEOF
 
-# Patch B: SigLevel=Never no work_dir após cp -r archiso + GPL-2.0-only.txt
+# Patch B: SigLinux=Never + GPL-2.0-only.txt após cp -r archiso no work_dir
 python3 - "${UTIL_ISO}" << 'PYEOF'
 import sys
 path = sys.argv[1]
 content = open(path).read()
 marker = '    cp -r archiso ${work_dir}/archiso'
-inject = '''
-    # Covenant: SigLevel=Never no work_dir — resolve 404 nos .db.sig
+inject = """
+    # Covenant: SigLevel=Never no work_dir
     _wpc="${work_dir}/archiso/pacman.conf"
     if [[ -f "${_wpc}" ]]; then
         sed -i 's/^SigLevel\\s*=.*/SigLevel = Never/' "${_wpc}"
         grep -q '^LocalFileSigLevel' "${_wpc}" || echo 'LocalFileSigLevel = Never' >> "${_wpc}"
         echo "==> [Covenant] SigLevel=Never em ${_wpc}"
     fi
-
-    # Covenant: GPL-2.0-only.txt no airootfs copiado — necessário para syslinux
-    # O mkarchiso procura esse arquivo em x86_64/airootfs durante Setting up SYSLINUX
+    # Covenant: GPL-2.0-only.txt para syslinux (mkarchiso linha 487)
     _gpl="${work_dir}/archiso/airootfs/usr/share/licenses/spdx/GPL-2.0-only.txt"
     mkdir -p "$(dirname "${_gpl}")"
-    [[ -f "${_gpl}" ]] || printf 'GNU GENERAL PUBLIC LICENSE\\nVersion 2, June 1991\\n' > "${_gpl}"
-    echo "==> [Covenant] GPL-2.0-only.txt criado em airootfs"'''
-if marker in content and 'Covenant: SigLevel' not in content:
+    printf 'GNU GENERAL PUBLIC LICENSE\nVersion 2, June 1991\n' > "${_gpl}"
+    echo "==> [Covenant] GPL-2.0-only.txt criado""""
+if marker in content and 'GPL-2.0-only' not in content:
     content = content.replace(marker, marker + inject)
     open(path, 'w').write(content)
-    print("OK: SigLevel + GPL patch injetados após cp -r.")
-elif 'Covenant: SigLevel' in content:
-    # Já tem o patch — adiciona GPL se não estiver
-    if 'GPL-2.0-only' not in content:
-        gpl_inject = '''
-    # Covenant: GPL-2.0-only.txt no airootfs copiado
-    _gpl="${work_dir}/archiso/airootfs/usr/share/licenses/spdx/GPL-2.0-only.txt"
-    mkdir -p "$(dirname "${_gpl}")"
-    [[ -f "${_gpl}" ]] || printf 'GNU GENERAL PUBLIC LICENSE\\nVersion 2\\n' > "${_gpl}"
-    echo "==> [Covenant] GPL-2.0-only.txt criado"'''
-        content = content.replace('echo "==> [Covenant] SigLevel=Never em ${_wpc}"\n    fi',
-            'echo "==> [Covenant] SigLevel=Never em ${_wpc}"\n    fi' + gpl_inject)
-        open(path, 'w').write(content)
-        print("OK: GPL patch adicionado ao bloco existente.")
-    else:
-        print("OK: SigLevel e GPL já presentes.")
-else:
-    print("WARN: marcador 'cp -r archiso' não encontrado.")
+    print("OK: SigLevel + GPL injetados.")
+elif marker in content and 'GPL-2.0-only' in content:
+    print("OK: patches já presentes.")
+elif marker not in content:
+    # Fallback: appenda a função no final do arquivo
+    content += '
+' + inject.replace('${work_dir}', '${work_dir}')
+    open(path, 'w').write(content)
+    print("WARN: marcador não encontrado, injetado no final.")
 PYEOF
 
 # Patch C: corrige nome da ISO (cachyos- → covenant-cachyos-)
