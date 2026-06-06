@@ -19,6 +19,9 @@ echo "=========================================="
 echo ""
 echo "==> [LIMPEZA] Removendo arquivos desnecessários..."
 
+# Desabilita abort-on-error na limpeza — erros de rm/find são não-fatais
+set +e
+
 echo "  -> Locales (mantém pt_BR, en_US, en_GB)..."
 find /usr/share/locale -mindepth 1 -maxdepth 1 -type d \
     ! -name 'pt_BR' ! -name 'en_US' ! -name 'en_GB' \
@@ -26,20 +29,23 @@ find /usr/share/locale -mindepth 1 -maxdepth 1 -type d \
 
 echo "  -> Documentação..."
 # Preserva /usr/share/licenses intacto — syslinux precisa de GPL-2.0-only.txt
-find /usr/share/doc -mindepth 1 -maxdepth 1 -type d \
-    -exec rm -rf {} + 2>/dev/null || true
-rm -rf /usr/share/info/* /usr/share/gtk-doc 2>/dev/null || true
+# Usa subshell para isolar erros do find/rm
+(
+    find /usr/share/doc -mindepth 1 -maxdepth 1 -type d 2>/dev/null \
+        | xargs -r rm -rf 2>/dev/null
+    rm -rf /usr/share/info/* /usr/share/gtk-doc 2>/dev/null
+) || true
 
 # Garante que o arquivo de licença GPL existe — necessário para syslinux BIOS
 mkdir -p /usr/share/licenses/spdx
 if [[ ! -f /usr/share/licenses/spdx/GPL-2.0-only.txt ]]; then
-    # Procura em outros locais comuns
-    found=$(find /usr/share/licenses /usr/share/common-licenses -name 'GPL*' 2>/dev/null | head -1)
+    found=$(find /usr/share/licenses /usr/share/common-licenses \
+        -name 'GPL*' 2>/dev/null | head -1)
     if [[ -n "${found}" ]]; then
         cp "${found}" /usr/share/licenses/spdx/GPL-2.0-only.txt
     else
-        # Cria um placeholder mínimo
-        echo "GNU GENERAL PUBLIC LICENSE Version 2" > /usr/share/licenses/spdx/GPL-2.0-only.txt
+        echo "GNU GENERAL PUBLIC LICENSE Version 2" \
+            > /usr/share/licenses/spdx/GPL-2.0-only.txt
     fi
 fi
 
@@ -103,6 +109,8 @@ echo "     Limpeza concluída."
 # ---------------------------------------------------------------------------
 # OTIMIZAÇÕES
 # ---------------------------------------------------------------------------
+# Reativa abort-on-error para as otimizações (erros aqui são importantes)
+set -euo pipefail
 echo ""
 echo "==> [OTIMIZAÇÕES] Aplicando tuning de sistema..."
 
