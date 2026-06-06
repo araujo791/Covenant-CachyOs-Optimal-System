@@ -8,6 +8,15 @@
 
 set -euo pipefail
 
+# Debug: mostra qual linha falha
+trap 'echo "==> [ABORT] cleanup falhou na linha ${LINENO}: ${BASH_COMMAND}" >&2' ERR
+
+# PRIMEIRO: garante GPL-2.0-only.txt — mkarchiso usa após o chroot fechar
+# Deve ser criado ANTES de qualquer operação que possa falhar
+mkdir -p /usr/share/licenses/spdx 2>/dev/null || true
+printf 'GNU GENERAL PUBLIC LICENSE\nVersion 2, June 1991\n' \
+    > /usr/share/licenses/spdx/GPL-2.0-only.txt 2>/dev/null || true
+
 echo ""
 echo "=========================================="
 echo " Covenant CachyOS — cleanup + otimizações"
