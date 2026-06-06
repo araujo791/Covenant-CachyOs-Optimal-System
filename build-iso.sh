@@ -285,7 +285,46 @@ _log_ok "util-iso.sh patchado."
 # ---------------------------------------------------------------------------
 # Profiledef — nome da ISO
 # ---------------------------------------------------------------------------
-_log_step "Configurando profiledef.sh..."
+_log_step "Removendo bios.syslinux do mkarchiso e profiledef..."
+
+# Patch no /usr/bin/mkarchiso — remove a função _make_bootmode_bios.syslinux
+# ou faz ela retornar imediatamente sem fazer nada
+if [[ -f /usr/bin/mkarchiso ]]; then
+    # Verifica se a função existe
+    if grep -q '_make_bootmode_bios.syslinux\|make_syslinux\|bios\.syslinux' /usr/bin/mkarchiso 2>/dev/null; then
+        # Substitui o bloco da função syslinux por um no-op
+        python3 - << 'PYEOF'
+import re
+with open('/usr/bin/mkarchiso', 'r') as f:
+    content = f.read()
+
+# Abordagem 1: faz a função _make_bootmode_bios.syslinux retornar imediatamente
+old = '_make_bootmode_bios.syslinux() {'
+new = '_make_bootmode_bios.syslinux() { echo "[Covenant] bios.syslinux desabilitado"; return 0;'
+if old in content:
+    content = content.replace(old, new, 1)
+    with open('/usr/bin/mkarchiso', 'w') as f:
+        f.write(content)
+    print("OK: _make_bootmode_bios.syslinux desabilitada.")
+else:
+    # Abordagem 2: procura variante com underscore/ponto diferente
+    m = re.search(r'(_make_bootmode_bios[._]syslinux\(\)\s*\{)', content)
+    if m:
+        content = content.replace(m.group(1),
+            m.group(1) + '\n    echo "[Covenant] bios.syslinux desabilitado"; return 0')
+        with open('/usr/bin/mkarchiso', 'w') as f:
+            f.write(content)
+        print(f"OK: {m.group(1)} desabilitada.")
+    else:
+        print("WARN: função syslinux não encontrada no mkarchiso.")
+PYEOF
+        _log_ok "/usr/bin/mkarchiso: bios.syslinux desabilitado."
+    else
+        _log_warn "/usr/bin/mkarchiso: referência a syslinux não encontrada."
+    fi
+fi
+
+# Também patch no profiledef.sh (redundância)
 PROFILEDEF="${ARCHISO}/profiledef.sh"
 if [[ -f "${PROFILEDEF}" ]]; then
     sed -i "s/^iso_name=.*/iso_name=\"${ISO_NAME_RAW}\"/"     "${PROFILEDEF}" 2>/dev/null || true
