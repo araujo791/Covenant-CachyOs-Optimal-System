@@ -131,7 +131,6 @@ plasma-workspace
 plymouth
 polkit
 polkit-kde-agent
-power-profiles-daemon
 pv
 qemu-guest-agent
 realtime-privileges
@@ -171,3 +170,4 @@ xdg-user-dirs-gtk
 xdg-utils
 xfsprogs
 zram-generator
+
