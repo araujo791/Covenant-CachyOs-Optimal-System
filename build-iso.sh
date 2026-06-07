@@ -509,11 +509,9 @@ vm.vfs_cache_pressure = 50
 
 # --- Scheduler: latência para desktop ---
 kernel.sched_autogroup_enabled = 1
-kernel.sched_min_granularity_ns = 500000
-kernel.sched_wakeup_granularity_ns = 250000
-kernel.sched_migration_cost_ns = 5000000
+# BORE/sched-ext não usa sched_* do CFS clássico — parâmetros removidos
 kernel.sched_cfs_bandwidth_slice_us = 3000
-kernel.sched_nr_migrate = 128
+
 
 # --- Segurança mínima mantida ---
 kernel.dmesg_restrict = 0
@@ -566,7 +564,7 @@ cat > /etc/udev/rules.d/60-io-scheduler.rules << 'IOSCHEDULER'
 
 # --- NVMe ---
 ACTION=="add|change", KERNEL=="nvme[0-9]n[0-9]*", ATTR{queue/scheduler}="none"
-ACTION=="add|change", KERNEL=="nvme[0-9]n[0-9]*", ATTR{queue/nr_requests}="2048"
+ACTION=="add|change", KERNEL=="nvme[0-9]n[0-9]*", ATTR{queue/nr_requests}="1024"
 ACTION=="add|change", KERNEL=="nvme[0-9]n[0-9]*", ATTR{queue/read_ahead_kb}="512"
 ACTION=="add|change", KERNEL=="nvme[0-9]n[0-9]*", ATTR{queue/add_random}="0"
 ACTION=="add|change", KERNEL=="nvme[0-9]n[0-9]*", ATTR{queue/nomerges}="0"
@@ -832,12 +830,15 @@ systemctl enable covenant-cpu-governor-setup.service 2>/dev/null \
     && echo "     covenant-cpu-governor-setup.service habilitado." \
     || echo "     [!] será habilitado no primeiro boot."
 
-# udev como fallback para hotplug
+# Carregar acpi_cpufreq antes do udev para que cpufreq/scaling_governor exista
+echo "acpi_cpufreq" > /etc/modules-load.d/acpi_cpufreq.conf
+
+# udev apenas para hotplug (CPU adicionada após boot)
 cat > /etc/udev/rules.d/50-cpu-governor.rules << 'CPUUDEV'
-SUBSYSTEM=="cpu", ACTION=="add", ATTR{cpufreq/scaling_governor}="performance"
+SUBSYSTEM=="cpu", ACTION=="add", TEST=="cpufreq/scaling_governor", ATTR{cpufreq/scaling_governor}="performance"
 CPUUDEV
 
-echo "     CPU governor: performance (primeiro boot + udev fallback)."
+echo "     CPU governor: performance (acpi_cpufreq + udev hotplug)."
 
 # ---------------------------------------------------------------------------
 # 13. Limites de sistema
@@ -908,7 +909,8 @@ fi
 #     Parâmetros:
 #       intel_pstate=disable      → usa intel_cpufreq para governor funcionar
 #       cpufreq.default_governor=performance → governor desde o boot
-#       nvme_core.default_ps_state=0         → sem power saving no NVMe
+#       nvme_core.default_ps_max_latency_us=0 → sem power saving no NVMe (default_ps_state removido em kernels recentes)
+#       intel_idle.max_cstate=1              → complementa processor.max_cstate=1
 #       nvme_core.io_timeout=4294967295      → timeout máximo p/ cargas pesadas
 #       mitigations=off           → +10-20% performance (desktop sem acesso público)
 #       nowatchdog nmi_watchdog=0 → libera IRQ, reduz jitter
@@ -925,7 +927,7 @@ fi
 # ---------------------------------------------------------------------------
 echo "  -> Configurando kernel cmdline de performance..."
 
-COVENANT_CMDLINE="intel_pstate=disable cpufreq.default_governor=performance nvme_core.default_ps_state=0 nvme_core.io_timeout=4294967295 mitigations=off nowatchdog nmi_watchdog=0 skew_tick=1 transparent_hugepage=madvise amdgpu.ppfeaturemask=0xffffffff pcie_aspm=off split_lock_detect=off processor.max_cstate=1 quiet loglevel=3"
+COVENANT_CMDLINE="intel_pstate=disable cpufreq.default_governor=performance nvme_core.default_ps_max_latency_us=0 nvme_core.io_timeout=4294967295 mitigations=off nowatchdog nmi_watchdog=0 skew_tick=1 transparent_hugepage=madvise amdgpu.ppfeaturemask=0xffffffff pcie_aspm=off split_lock_detect=off processor.max_cstate=1 intel_idle.max_cstate=1 quiet loglevel=3"
 
 # --- a) GRUB ---
 mkdir -p /etc/default/grub.d
@@ -1319,11 +1321,9 @@ vm.dirty_writeback_centisecs = 1500
 vm.dirty_expire_centisecs = 3000
 vm.vfs_cache_pressure = 50
 kernel.sched_autogroup_enabled = 1
-kernel.sched_min_granularity_ns = 500000
-kernel.sched_wakeup_granularity_ns = 250000
-kernel.sched_migration_cost_ns = 5000000
+# BORE/sched-ext não usa sched_* do CFS clássico — parâmetros removidos
 kernel.sched_cfs_bandwidth_slice_us = 3000
-kernel.sched_nr_migrate = 128
+
 kernel.dmesg_restrict = 0
 kernel.kptr_restrict = 1
 kernel.unprivileged_bpf_disabled = 1
@@ -1359,7 +1359,7 @@ _log_step "5/23 — I/O scheduler..."
 mkdir -p /etc/udev/rules.d
 cat > /etc/udev/rules.d/60-io-scheduler.rules << 'IOSCHED'
 ACTION=="add|change", KERNEL=="nvme[0-9]n[0-9]*", ATTR{queue/scheduler}="none"
-ACTION=="add|change", KERNEL=="nvme[0-9]n[0-9]*", ATTR{queue/nr_requests}="2048"
+ACTION=="add|change", KERNEL=="nvme[0-9]n[0-9]*", ATTR{queue/nr_requests}="1024"
 ACTION=="add|change", KERNEL=="nvme[0-9]n[0-9]*", ATTR{queue/read_ahead_kb}="512"
 ACTION=="add|change", KERNEL=="nvme[0-9]n[0-9]*", ATTR{queue/add_random}="0"
 ACTION=="add|change", KERNEL=="nvme[0-9]n[0-9]*", ATTR{queue/nomerges}="0"
@@ -1524,8 +1524,12 @@ NPROC=$(nproc 2>/dev/null || echo 28)
         printf 'w! /sys/devices/system/cpu/cpu%d/cpufreq/scaling_governor - - - - performance\n' "$i"
     done
 } > /etc/tmpfiles.d/cpu-governor.conf
+# Carregar acpi_cpufreq antes do udev para que cpufreq/scaling_governor exista
+echo "acpi_cpufreq" > /etc/modules-load.d/acpi_cpufreq.conf
+
+# udev apenas para hotplug (CPU adicionada após boot)
 cat > /etc/udev/rules.d/50-cpu-governor.rules << 'CPUUDEV'
-SUBSYSTEM=="cpu", ACTION=="add", ATTR{cpufreq/scaling_governor}="performance"
+SUBSYSTEM=="cpu", ACTION=="add", TEST=="cpufreq/scaling_governor", ATTR{cpufreq/scaling_governor}="performance"
 CPUUDEV
 if ! $IN_CHROOT; then
     systemd-tmpfiles --create /etc/tmpfiles.d/cpu-governor.conf 2>/dev/null || true
@@ -1583,7 +1587,7 @@ _log_ok "pacman."
 
 # --- 16. Kernel cmdline ---
 _log_step "17/23 — Kernel cmdline..."
-COV_CMD="intel_pstate=disable cpufreq.default_governor=performance nvme_core.default_ps_state=0 nvme_core.io_timeout=4294967295 mitigations=off nowatchdog nmi_watchdog=0 skew_tick=1 transparent_hugepage=madvise amdgpu.ppfeaturemask=0xffffffff pcie_aspm=off split_lock_detect=off processor.max_cstate=1 quiet loglevel=3"
+COV_CMD="intel_pstate=disable cpufreq.default_governor=performance nvme_core.default_ps_max_latency_us=0 nvme_core.io_timeout=4294967295 mitigations=off nowatchdog nmi_watchdog=0 skew_tick=1 transparent_hugepage=madvise amdgpu.ppfeaturemask=0xffffffff pcie_aspm=off split_lock_detect=off processor.max_cstate=1 intel_idle.max_cstate=1 quiet loglevel=3"
 mkdir -p /etc/default/grub.d
 printf '# Covenant CachyOS\nGRUB_CMDLINE_LINUX_DEFAULT="%s"\n' "$COV_CMD" > /etc/default/grub.d/covenant-cmdline.cfg
 mkdir -p /etc/kernel/cmdline.d
@@ -2153,5 +2157,6 @@ echo ""
 
 timer_start=$(get_timer)
 run_build "${build_list_iso}"
+
 
 
