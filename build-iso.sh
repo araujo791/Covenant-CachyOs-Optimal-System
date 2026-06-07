@@ -1808,18 +1808,19 @@ _log_ok "covenant-first-boot.service criado e habilitado."
 # cachyos-calamares-next sob demanda; injetamos nosso módulo shellprocess
 # logo após essa instalação.
 # ---------------------------------------------------------------------------
-_log_step "Patchando calamares-online.sh para hook Covenant..."
+_log_step "Configurando Calamares para pós-instalação Covenant..."
 
-CALAMARES_SCRIPT="${ARCHISO}/airootfs/usr/local/bin/calamares-online.sh"
-if [[ -f "$CALAMARES_SCRIPT" ]]; then
-    # Cria script que injeta módulo shellprocess no Calamares
-    CALAMARES_HOOK="${ARCHISO}/airootfs/usr/local/bin/covenant-calamares-hook.sh"
-    cat > "${CALAMARES_HOOK}" << 'CALAHOOK'
-#!/bin/bash
-# Covenant: injeta módulo shellprocess no Calamares para pós-instalação
-if [[ -d /usr/share/calamares ]] || [[ -d /etc/calamares ]]; then
-    mkdir -p /etc/calamares/modules
-    cat > /etc/calamares/modules/shellprocess-covenant.conf << 'MODEOF'
+# Abordagem direta: criar configs em /etc/calamares/ no airootfs durante o build.
+# O Calamares lê /etc/calamares/ com prioridade sobre /usr/share/calamares/.
+# Funciona tanto para instalação online quanto offline, sem depender de
+# patching de scripts em runtime.
+
+CALAMARES_ETC="${ARCHISO}/airootfs/etc/calamares"
+CALAMARES_SHARE="${ARCHISO}/airootfs/usr/share/calamares"
+mkdir -p "${CALAMARES_ETC}/modules"
+
+# 1. Criar shellprocess-covenant.conf em /etc/calamares/modules/
+cat > "${CALAMARES_ETC}/modules/shellprocess-covenant.conf" << 'MODEOF'
 ---
 dontChroot: false
 timeout: 600
@@ -1827,27 +1828,142 @@ script:
     - command: "/usr/local/bin/covenant-post-install.sh && touch /var/lib/covenant-setup-done"
       timeout: 600
 MODEOF
-    # Injeta no settings.conf antes do módulo 'umount' (último passo)
-    if [[ -f /etc/calamares/settings.conf ]]; then
-        if ! grep -q 'shellprocess@covenant' /etc/calamares/settings.conf; then
-            sed -i '/^  - umount$/i\  - shellprocess@covenant' /etc/calamares/settings.conf 2>/dev/null || \
-            sed -i '/umount/i\  - shellprocess@covenant' /etc/calamares/settings.conf 2>/dev/null || true
-        fi
-    fi
-    echo "Covenant: módulo shellprocess@covenant injetado no Calamares."
-fi
-CALAHOOK
-    chmod +x "${CALAMARES_HOOK}"
+_log_ok "shellprocess-covenant.conf criado em /etc/calamares/modules/"
 
-    # Insere chamada do hook APÓS instalação do cachyos-calamares-next
-    if ! grep -q 'covenant-calamares-hook' "$CALAMARES_SCRIPT"; then
-        sed -i '/sudo pacman -Sy --noconfirm cachyos-calamares-next/a\    /usr/local/bin/covenant-calamares-hook.sh' "$CALAMARES_SCRIPT"
-        _log_ok "calamares-online.sh patchado com hook Covenant."
-    else
-        _log_ok "calamares-online.sh já tem hook Covenant."
+# 2. Copiar settings_online.conf para /etc/calamares/ e injetar shellprocess@covenant
+#    /etc/calamares/ tem prioridade sobre /usr/share/calamares/ no Calamares.
+SETTINGS_SRC="${CALAMARES_SHARE}/settings_online.conf"
+SETTINGS_DST="${CALAMARES_ETC}/settings_online.conf"
+
+if [[ -f "${SETTINGS_SRC}" ]]; then
+    cp "${SETTINGS_SRC}" "${SETTINGS_DST}"
+
+    # Adicionar instância covenant na seção instances:
+    if ! grep -q 'covenant' "${SETTINGS_DST}"; then
+        sed -i '/^instances:/a- id:       covenant
+  module:   shellprocess
+  config:   shellprocess-covenant.conf' "${SETTINGS_DST}"
     fi
+
+    # Injetar shellprocess@covenant antes do umount na sequência exec:
+    if ! grep -q 'shellprocess@covenant' "${SETTINGS_DST}"; then
+        sed -i 's/  - umount/  - shellprocess@covenant\n  - umount/' "${SETTINGS_DST}"
+    fi
+
+    _log_ok "settings_online.conf copiado para /etc/calamares/ com shellprocess@covenant injetado."
 else
-    _log_warn "calamares-online.sh não encontrado — hook Calamares não aplicado."
+    # Fallback: settings_online.conf não existe ainda no airootfs (será instalado
+    # junto com o cachyos-calamares-next). Criamos um completo baseado no padrão
+    # do CachyOS com shellprocess@covenant já incluído.
+    _log_warn "settings_online.conf não encontrado em ${CALAMARES_SHARE} — criando fallback completo."
+    cat > "${SETTINGS_DST}" << 'SETTEOF'
+# SPDX-License-Identifier: CC0-1.0
+---
+modules-search: [ local ]
+
+instances:
+- id:       online
+  module:   packages
+  config:   packages_online.conf
+
+- id:       online
+  module:   welcome
+  config:   welcome_online.conf
+
+- id:       before-online
+  module:   shellprocess
+  config:   shellprocess-before-online.conf
+
+- id:       modify_mk_hook
+  module:   shellprocess
+  config:   shellprocess_modify_mk_hook.conf
+
+- id:       reset_mk_hook
+  module:   shellprocess
+  config:   shellprocess_reset_mk_hook.conf
+
+- id:       initialize_pacman
+  module:   shellprocess
+  config:   shellprocess_initialize_pacman.conf
+
+- id:       bootloader
+  module:   packagechooser
+  config:   packagechooser_bootloader.conf
+
+- id:       desktop
+  module:   packagechooser
+  config:   packagechooser_desktop.conf
+
+- id:       enable_ufw
+  module:   shellprocess
+  config:   shellprocess_enable_ufw.conf
+
+- id:       btrfs_snapshot
+  module:   shellprocess
+  config:   shellprocess_btrfs_snapshot.conf
+
+- id:       covenant
+  module:   shellprocess
+  config:   shellprocess-covenant.conf
+
+sequence:
+- show:
+  - welcome@online
+  - locale
+  - keyboard
+  - packagechooser@bootloader
+  - partition
+  - packagechooser@desktop
+  - netinstall
+  - users
+  - summary
+- exec:
+  - partition
+  - zfs
+  - mount
+  - shellprocess@modify_mk_hook
+  - shellprocess@initialize_pacman
+  - shellprocess@before-online
+  - pacstrap
+  - machineid
+  - locale
+  - keyboard
+  - localecfg
+  - chwd
+  - packages@online
+  - luksbootkeyfile
+  - luksopenswaphookcfg
+  - fstab
+  - plymouthcfg
+  - zfshostid
+  - initcpiocfg
+  - initcpio
+  - users
+  - networkcfg
+  - displaymanager
+  - hwclock
+  - grubcfg
+  - bootloader
+  - shellprocess@reset_mk_hook
+  - services-systemd
+  - shellprocess
+  - shellprocess@enable_ufw
+  - shellprocess@btrfs_snapshot
+  - shellprocess@covenant
+  - umount
+- show:
+  - finished
+
+branding: cachyos
+prompt-install: true
+dont-chroot: false
+oem-setup: false
+disable-cancel: false
+disable-cancel-during-exec: false
+hide-back-and-next-during-exec: true
+quit-at-end: false
+SETTEOF
+    _log_ok "settings_online.conf fallback criado com shellprocess@covenant."
 fi
 
 # ---------------------------------------------------------------------------
@@ -1861,7 +1977,6 @@ if ! grep -q 'covenant-post-install' "${PROFILEDEF}" 2>/dev/null; then
     sed -i '/^)$/i\  ["/usr/local/bin/covenant-check.sh"]="0:0:755"' "${PROFILEDEF}" 2>/dev/null || true
     sed -i '/^)$/i\  ["/usr/local/bin/covenant-gpu-performance.sh"]="0:0:755"' "${PROFILEDEF}" 2>/dev/null || true
     sed -i '/^)$/i\  ["/usr/local/bin/covenant-irq-affinity.sh"]="0:0:755"' "${PROFILEDEF}" 2>/dev/null || true
-    sed -i '/^)$/i\  ["/usr/local/bin/covenant-calamares-hook.sh"]="0:0:755"' "${PROFILEDEF}" 2>/dev/null || true
     _log_ok "Permissões adicionadas ao profiledef.sh."
 else
     _log_ok "Permissões já existem no profiledef.sh."
@@ -2038,4 +2153,5 @@ echo ""
 
 timer_start=$(get_timer)
 run_build "${build_list_iso}"
+
 
