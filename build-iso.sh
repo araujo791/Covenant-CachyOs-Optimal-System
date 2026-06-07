@@ -236,6 +236,20 @@ _log_ok "iso_name : '${ISO_NAME_RAW}'"
 _log_ok "Prefixo  : '${ISO_NAME_SAFE}-'"
 
 # ---------------------------------------------------------------------------
+# iso_name override — preserva nome customizado definido no profiledef.sh
+# O build respeita qualquer iso_name que o usuário tenha editado no profiledef.
+# Para forçar um nome diferente sem editar o profiledef, defina antes de rodar:
+#   export ISO_NAME_OVERRIDE="Covenant-CachyOS"
+# ---------------------------------------------------------------------------
+if [[ -n "${ISO_NAME_OVERRIDE:-}" ]]; then
+    _log_step "Aplicando iso_name override: '${ISO_NAME_OVERRIDE}'..."
+    sed -i "s/^iso_name=.*/iso_name=\"${ISO_NAME_OVERRIDE}\"/" "${PROFILEDEF}"
+    ISO_NAME_RAW="${ISO_NAME_OVERRIDE}"
+    ISO_NAME_SAFE="${ISO_NAME_RAW// /_}"
+    _log_ok "iso_name definido para: '${ISO_NAME_RAW}'"
+fi
+
+# ---------------------------------------------------------------------------
 # Remover bios.syslinux do profiledef — boot UEFI only
 # Xeon E5-2680v4 suporta UEFI nativo. BIOS/Legacy desnecessário.
 # Sem isso, mkarchiso tenta copiar isolinux.bin → xorriso falha.
@@ -905,7 +919,6 @@ fi
 #       split_lock_detect=off     → evita SIGBUS em workloads legados
 #       quiet loglevel=3          → boot limpo
 #       processor.max_cstate=1    → impede deep C-states no Xeon (latência)
-#       idle=poll                 → CPU nunca dorme (máx throughput, mais energia)
 #
 #     NOTA DE SEGURANÇA: mitigations=off desabilita proteções contra Spectre,
 #     Meltdown, etc. Aceitável APENAS em desktop isolado sem acesso público.
@@ -2025,3 +2038,4 @@ echo ""
 
 timer_start=$(get_timer)
 run_build "${build_list_iso}"
+
