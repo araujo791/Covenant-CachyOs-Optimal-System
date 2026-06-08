@@ -2102,6 +2102,24 @@ echo ""
 timer_start=$(get_timer)
 run_build "${build_list_iso}"
 
+# ---------------------------------------------------------------------------
+# Pós-build: aplicar covenant-calamares-setup no airootfs montado
+# O run_build monta o airootfs em work_dir/x86_64/airootfs e instala os pacotes.
+# Usamos arch-chroot para rodar o setup APÓS o cachyos-calamares-next estar instalado.
+# ---------------------------------------------------------------------------
+AIROOTFS_WORK="${work_dir}/x86_64/airootfs"
+if [[ -d "${AIROOTFS_WORK}/etc/calamares" ]]; then
+    _log_step "Pós-build: aplicando covenant-calamares-setup no airootfs..."
+    # Copiar o script para o airootfs se ainda não estiver lá
+    cp "${ARCHISO}/airootfs/etc/calamares/scripts/covenant-calamares-setup.sh"        "${AIROOTFS_WORK}/etc/calamares/scripts/covenant-calamares-setup.sh" 2>/dev/null || true
+    cp "${ARCHISO}/airootfs/usr/local/bin/covenant-target-setup"        "${AIROOTFS_WORK}/usr/local/bin/covenant-target-setup" 2>/dev/null || true
+    arch-chroot "${AIROOTFS_WORK}" bash /etc/calamares/scripts/covenant-calamares-setup.sh
+    _log_ok "shellprocess-before-online.conf atualizado no airootfs de build."
+else
+    _log_warn "airootfs de build não encontrado em ${AIROOTFS_WORK} — setup não aplicado."
+fi
+
+
 
 
 
