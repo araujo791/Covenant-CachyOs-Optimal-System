@@ -1829,55 +1829,80 @@ _log_ok "covenant-first-boot.service criado e habilitado."
 # ---------------------------------------------------------------------------
 _log_step "Configurando Calamares para pós-instalação Covenant..."
 
-# Abordagem: pacman hooks no airootfs que:
-# 1. Removem arquivos conflitantes ANTES do cachyos-calamares-next instalar
-# 2. Patcham o shellprocess.conf APÓS a instalação
-# Isso evita "conflicting files" sem modificar o pacote.
+# Abordagem final: sobrescrever shellprocess-before-online.conf no airootfs.
+# Este módulo roda no live com dontChroot:true ANTES do pacstrap.
+# O ${ROOT} já aponta para o target montado — copiamos o covenant-post-install.sh
+# e criamos o covenant-first-boot.service diretamente no target.
+# Assim o primeiro boot do sistema instalado executa o post-install automaticamente.
+# Não depende de pacman hooks no target nem de shellprocess no Calamares online.
 
 CALAMARES_ETC="${ARCHISO}/airootfs/etc/calamares"
-HOOKS_DIR="${ARCHISO}/airootfs/etc/pacman.d/hooks"
-mkdir -p "${CALAMARES_ETC}/scripts" "${HOOKS_DIR}"
+mkdir -p "${CALAMARES_ETC}/modules"
 
-# Hook PRE: remove arquivos que criaríamos (conflito com pacman)
-cat > "${HOOKS_DIR}/00-covenant-calamares-pre.hook" << 'HOOKEOF'
-[Trigger]
-Operation = Install
-Operation = Upgrade
-Type = Package
-Target = cachyos-calamares-next
+cat > "${CALAMARES_ETC}/modules/shellprocess-before-online.conf" << 'BEFOREEOF'
+---
+i18n:
+    name: "Preparing your system for online installation of CachyOS"
+dontChroot: true
+timeout: 30
+script:
+    - command: "cp /etc/pacman.conf ${ROOT}/etc/pacman.conf"
+    - command: "/etc/calamares/scripts/detect-architecture ${ROOT}/etc/pacman.conf"
+    - command: "/usr/local/bin/dmcheck"
+    - "-rm /usr/local/bin/dmcheck"
+    - "-rm -rf /home/liveuser"
+    - '-runuser ${USER} -c "cp -rf /etc/skel/. /home/${USER}/."'
+    - '-runuser ${USER} -c "rm -rf /home/${USER}/{.xsession,.xprofile,.xinitrc}"'
+    - command: "/etc/calamares/scripts/shell-setup ${USER}"
+      verbose: true
+    - '-rm /etc/calamares/scripts/shell-setup'
+    - command: "/etc/calamares/scripts/bootloader-post-setup"
+    - "-rm /etc/calamares/scripts/bootloader-post-setup"
+    - command: "/etc/calamares/scripts/covenant-target-setup ${ROOT}"
+      timeout: 30
+BEFOREEOF
 
-[Action]
-Description = Covenant: preparando Calamares...
-When = PreTransaction
-Exec = /bin/sh -c 'rm -f /etc/calamares/modules/shellprocess.conf /etc/calamares/modules/shellprocess-before-online.conf'
-HOOKEOF
-
-# Hook POST: patcha o shellprocess.conf após o pacote instalar
-cat > "${HOOKS_DIR}/99-covenant-calamares-post.hook" << 'HOOKEOF2'
-[Trigger]
-Operation = Install
-Operation = Upgrade
-Type = Package
-Target = cachyos-calamares-next
-
-[Action]
-Description = Covenant: injetando post-install no Calamares...
-When = PostTransaction
-Exec = /bin/sh -c '/etc/calamares/scripts/covenant-calamares-setup.sh'
-HOOKEOF2
-
-# Script que patcha o shellprocess.conf após instalação do pacote
-cat > "${CALAMARES_ETC}/scripts/covenant-calamares-setup.sh" << 'SETUPEOF'
+# Script que copia covenant-post-install.sh e cria first-boot.service no target
+mkdir -p "${CALAMARES_ETC}/scripts"
+cat > "${CALAMARES_ETC}/scripts/covenant-target-setup" << 'TARGETEOF'
 #!/bin/bash
-SHELLPROCESS="/etc/calamares/modules/shellprocess.conf"
-if [[ -f "${SHELLPROCESS}" ]] && ! grep -q 'covenant-post-install' "${SHELLPROCESS}"; then
-    printf '    - command: "/usr/local/bin/covenant-post-install.sh && touch /var/lib/covenant-setup-done"\n      timeout: 600\n' >> "${SHELLPROCESS}"
-    echo "Covenant: covenant-post-install.sh adicionado ao shellprocess.conf"
-fi
-SETUPEOF
-chmod +x "${CALAMARES_ETC}/scripts/covenant-calamares-setup.sh"
+# Roda no live com dontChroot:true — $1 é o ROOT do target
+TARGET="$1"
+[[ -z "$TARGET" || ! -d "$TARGET" ]] && { echo "Covenant: TARGET inválido: $TARGET"; exit 0; }
 
-_log_ok "Pacman hooks criados para injetar covenant-post-install no Calamares."
+# 1. Copiar covenant-post-install.sh para o target
+mkdir -p "${TARGET}/usr/local/bin"
+cp /usr/local/bin/covenant-post-install.sh "${TARGET}/usr/local/bin/covenant-post-install.sh"
+chmod +x "${TARGET}/usr/local/bin/covenant-post-install.sh"
+
+# 2. Criar covenant-first-boot.service no target
+mkdir -p "${TARGET}/etc/systemd/system"
+cat > "${TARGET}/etc/systemd/system/covenant-first-boot.service" << 'SVCEOF'
+[Unit]
+Description=Covenant CachyOS - Primeiro Boot
+After=network.target
+ConditionPathExists=!/var/lib/covenant-setup-done
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash -c '/usr/local/bin/covenant-post-install.sh && touch /var/lib/covenant-setup-done'
+RemainAfterExit=yes
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+SVCEOF
+
+# 3. Habilitar o serviço no target
+mkdir -p "${TARGET}/etc/systemd/system/multi-user.target.wants"
+ln -sf /etc/systemd/system/covenant-first-boot.service     "${TARGET}/etc/systemd/system/multi-user.target.wants/covenant-first-boot.service"
+
+echo "Covenant: post-install.sh e first-boot.service instalados no target ${TARGET}."
+TARGETEOF
+chmod +x "${CALAMARES_ETC}/scripts/covenant-target-setup"
+
+_log_ok "shellprocess-before-online.conf configurado com covenant-target-setup."
 
 # ---------------------------------------------------------------------------
 # Atualizar file_permissions no profiledef.sh
@@ -2066,6 +2091,7 @@ echo ""
 
 timer_start=$(get_timer)
 run_build "${build_list_iso}"
+
 
 
 
