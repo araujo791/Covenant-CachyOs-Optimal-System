@@ -270,6 +270,19 @@ if [[ -d "${ARCHISO}/syslinux" ]]; then
 fi
 
 # ---------------------------------------------------------------------------
+# Remover arquivos do airootfs que conflitam com cachyos-calamares-next
+# O CachyOS-Live-ISO upstream já tem esses arquivos em airootfs/etc/calamares/
+# O pacman recusa instalar o pacote se os arquivos já existirem no airootfs
+# Removemos aqui para que o pacman instale limpo; depois o pacman hook reaplica
+# ---------------------------------------------------------------------------
+_log_step "Removendo arquivos conflitantes do airootfs (calamares)..."
+rm -f "${ARCHISO}/airootfs/etc/calamares/modules/shellprocess.conf"
+rm -f "${ARCHISO}/airootfs/etc/calamares/modules/shellprocess-before-online.conf"
+rm -f "${ARCHISO}/airootfs/etc/calamares/modules/shellprocess-covenant.conf"
+rm -f "${ARCHISO}/airootfs/etc/calamares/settings_online.conf"
+_log_ok "Arquivos conflitantes removidos."
+
+# ---------------------------------------------------------------------------
 # Aplicar packages customizados
 # NOTA: util-iso.sh copia packages_desktop → packages antes do
 # mkarchiso, por isso copiamos para AMBOS os arquivos.
@@ -2053,6 +2066,7 @@ echo ""
 
 timer_start=$(get_timer)
 run_build "${build_list_iso}"
+
 
 
 
