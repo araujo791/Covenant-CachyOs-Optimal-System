@@ -1816,75 +1816,55 @@ _log_ok "covenant-first-boot.service criado e habilitado."
 # ---------------------------------------------------------------------------
 _log_step "Configurando Calamares para pós-instalação Covenant..."
 
-# Abordagem: sobrescrever /etc/calamares/modules/shellprocess.conf no airootfs.
-# O Calamares online já executa o módulo "shellprocess" (sem @) na sequência exec
-# com dontChroot:false — roda no target após o pacstrap.
-# /etc/calamares/ tem prioridade sobre /usr/share/calamares/, então basta criar
-# o arquivo aqui para sobrescrever o padrão do CachyOS.
+# Abordagem: pacman hooks no airootfs que:
+# 1. Removem arquivos conflitantes ANTES do cachyos-calamares-next instalar
+# 2. Patcham o shellprocess.conf APÓS a instalação
+# Isso evita "conflicting files" sem modificar o pacote.
 
 CALAMARES_ETC="${ARCHISO}/airootfs/etc/calamares"
-mkdir -p "${CALAMARES_ETC}/modules"
+HOOKS_DIR="${ARCHISO}/airootfs/etc/pacman.d/hooks"
+mkdir -p "${CALAMARES_ETC}/scripts" "${HOOKS_DIR}"
 
-# Criar script de injeção: roda no live (dontChroot:true) via shellprocess-before-online,
-# copia o covenant-post-install.sh para o target via ${ROOT} após o pacstrap.
-# O shellprocess-before-online.conf tem dontChroot:true — acessa o target via ${ROOT}.
-# Criamos um conf extra que patcha o shellprocess.conf DENTRO do target após instalação.
+# Hook PRE: remove arquivos que criaríamos (conflito com pacman)
+cat > "${HOOKS_DIR}/00-covenant-calamares-pre.hook" << 'HOOKEOF'
+[Trigger]
+Operation = Install
+Operation = Upgrade
+Type = Package
+Target = cachyos-calamares-next
 
-cat > "${CALAMARES_ETC}/modules/shellprocess-before-online.conf" << 'BEFOREEOF'
----
-dontChroot: true
-timeout: 120
-script:
-    - command: "/etc/calamares/scripts/covenant-inject.sh"
-      verbose: true
-BEFOREEOF
+[Action]
+Description = Covenant: preparando Calamares...
+When = PreTransaction
+Exec = /bin/sh -c 'rm -f /etc/calamares/modules/shellprocess.conf /etc/calamares/modules/shellprocess-before-online.conf'
+HOOKEOF
 
-# Script que copia o post-install para o target antes do pacstrap terminar
-# Na verdade precisa rodar APÓS o pacstrap — usar shellprocess (dontChroot:false)
-# mas sem criar o arquivo antes do pacman instalar o cachyos-calamares-next.
-# Solução: criar /etc/calamares/modules/shellprocess.conf via covenant-inject.sh
-# que roda no target APÓS o cachyos-calamares-next ser instalado.
-# O shellprocess genérico no settings_online.conf roda DEPOIS de packages@online.
+# Hook POST: patcha o shellprocess.conf após o pacote instalar
+cat > "${HOOKS_DIR}/99-covenant-calamares-post.hook" << 'HOOKEOF2'
+[Trigger]
+Operation = Install
+Operation = Upgrade
+Type = Package
+Target = cachyos-calamares-next
 
-mkdir -p "${CALAMARES_ETC}/scripts"
-cat > "${CALAMARES_ETC}/scripts/covenant-inject.sh" << 'INJECTEOF'
+[Action]
+Description = Covenant: injetando post-install no Calamares...
+When = PostTransaction
+Exec = /bin/sh -c '/etc/calamares/scripts/covenant-calamares-setup.sh'
+HOOKEOF2
+
+# Script que patcha o shellprocess.conf após instalação do pacote
+cat > "${CALAMARES_ETC}/scripts/covenant-calamares-setup.sh" << 'SETUPEOF'
 #!/bin/bash
-# Roda no live com dontChroot:true — ROOT aponta para o target montado
-TARGET="${ROOT}"
+SHELLPROCESS="/etc/calamares/modules/shellprocess.conf"
+if [[ -f "${SHELLPROCESS}" ]] && ! grep -q 'covenant-post-install' "${SHELLPROCESS}"; then
+    printf '    - command: "/usr/local/bin/covenant-post-install.sh && touch /var/lib/covenant-setup-done"\n      timeout: 600\n' >> "${SHELLPROCESS}"
+    echo "Covenant: covenant-post-install.sh adicionado ao shellprocess.conf"
+fi
+SETUPEOF
+chmod +x "${CALAMARES_ETC}/scripts/covenant-calamares-setup.sh"
 
-# 1. Copiar covenant-post-install.sh para o target
-mkdir -p "${TARGET}/usr/local/bin"
-cp /usr/local/bin/covenant-post-install.sh "${TARGET}/usr/local/bin/covenant-post-install.sh"
-chmod +x "${TARGET}/usr/local/bin/covenant-post-install.sh"
-
-# 2. Criar shellprocess.conf no target usando printf (evita heredoc aninhado)
-mkdir -p "${TARGET}/etc/calamares/modules"
-printf '%s\n' \
-    '---' \
-    'dontChroot: false' \
-    'timeout: 3600' \
-    'script:' \
-    '    - "-rm /etc/systemd/system/etc-pacman.d-gnupg.mount"' \
-    '    - "-rm /etc/systemd/system/display-manager.service"' \
-    '    - command: "/usr/local/bin/dmcheck"' \
-    '    - "-rm /usr/local/bin/dmcheck"' \
-    '    - "-rm -rf /home/liveuser"' \
-    '    - '\''-runuser ${USER} -c "cp -rf /etc/skel/. /home/${USER}/."'\''' \
-    '    - '\''-runuser ${USER} -c "rm -rf /home/${USER}/{.xsession,.xprofile,.xinitrc}"'\''' \
-    '    - command: "/etc/calamares/scripts/shell-setup ${USER}"' \
-    '      verbose: true' \
-    '    - '\''-rm /etc/calamares/scripts/shell-setup'\''' \
-    '    - command: "/etc/calamares/scripts/bootloader-post-setup"' \
-    '    - '\''-rm /etc/calamares/scripts/bootloader-post-setup'\''' \
-    '    - command: "/usr/local/bin/covenant-post-install.sh && touch /var/lib/covenant-setup-done"' \
-    '      timeout: 600' \
-    > "${TARGET}/etc/calamares/modules/shellprocess.conf"
-
-echo "Covenant: shellprocess.conf e post-install.sh injetados no target."
-INJECTEOF
-chmod +x "${CALAMARES_ETC}/scripts/covenant-inject.sh"
-
-_log_ok "covenant-inject.sh criado — injetará post-install no target via shellprocess-before-online."
+_log_ok "Pacman hooks criados para injetar covenant-post-install no Calamares."
 
 # ---------------------------------------------------------------------------
 # Atualizar file_permissions no profiledef.sh
@@ -2073,6 +2053,7 @@ echo ""
 
 timer_start=$(get_timer)
 run_build "${build_list_iso}"
+
 
 
 
