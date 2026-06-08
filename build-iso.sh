@@ -782,55 +782,7 @@ echo "  -> Configurando CPU governor (serviço de primeiro boot)..."
 
 mkdir -p /etc/systemd/system /usr/local/bin /etc/udev/rules.d
 
-cat > /usr/local/bin/covenant-cpu-governor-setup.sh << 'CPUSCRIPT'
-#!/bin/bash
-# Covenant — CPU governor setup via cpupower
-# Funciona com acpi-cpufreq (E5-2680v4 não usa intel_pstate)
-set -euo pipefail
-
-cpupower frequency-set -g performance 2>/dev/null || {
-    # fallback: escrever direto no sysfs
-    for gov in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do
-        echo "performance" > "$gov" 2>/dev/null || true
-    done
-}
-
-CURRENT=$(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor 2>/dev/null || echo "n/a")
-echo "covenant-cpu-governor: governor=${CURRENT}"
-CPUSCRIPT
-
-chmod +x /usr/local/bin/covenant-cpu-governor-setup.sh
-
-cat > /etc/systemd/system/covenant-cpu-governor-setup.service << 'CPUSVC'
-[Unit]
-Description=Covenant CachyOS - CPU Governor (performance via cpupower)
-After=multi-user.target
-Before=display-manager.service
-
-[Service]
-Type=oneshot
-ExecStart=/usr/local/bin/covenant-cpu-governor-setup.sh
-RemainAfterExit=yes
-StandardOutput=journal
-StandardError=journal
-
-[Install]
-WantedBy=multi-user.target
-CPUSVC
-
-systemctl enable covenant-cpu-governor-setup.service 2>/dev/null \
-    && echo "     covenant-cpu-governor-setup.service habilitado." \
-    || echo "     [!] será habilitado no primeiro boot."
-
-# Carregar acpi_cpufreq antes do udev para que cpufreq/scaling_governor exista
-echo "acpi_cpufreq" > /etc/modules-load.d/acpi_cpufreq.conf
-
-# udev apenas para hotplug (CPU adicionada após boot)
-cat > /etc/udev/rules.d/50-cpu-governor.rules << 'CPUUDEV'
-SUBSYSTEM=="cpu", ACTION=="add", TEST=="cpufreq/scaling_governor", ATTR{cpufreq/scaling_governor}="performance"
-CPUUDEV
-
-echo "     CPU governor: performance (acpi_cpufreq + udev hotplug)."
+# [cpu-governor movido para dentro do covenant-post-install.sh]
 
 # ---------------------------------------------------------------------------
 # 13. Limites de sistema
@@ -1735,6 +1687,54 @@ printf '[Settings]\ngtk-cursor-theme-name=Adwaita\ngtk-cursor-theme-size=24\n' >
 printf '[Icon Theme]\nName=Default\nComment=Default Cursor Theme\nInherits=Adwaita\n' > /etc/skel/.icons/default/index.theme
 _log_ok "Cursor."
 
+# --- CPU governor setup ---
+_log_step "CPU governor — cpupower + service..."
+cat > /usr/local/bin/covenant-cpu-governor-setup.sh << 'CPUSCRIPT'
+#!/bin/bash
+# Covenant — CPU governor setup via cpupower
+# Funciona com acpi-cpufreq (E5-2680v4 não usa intel_pstate)
+cpupower frequency-set -g performance 2>/dev/null || {
+    for gov in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do
+        echo "performance" > "$gov" 2>/dev/null || true
+    done
+}
+CURRENT=$(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor 2>/dev/null || echo "n/a")
+echo "covenant-cpu-governor: governor=${CURRENT}"
+CPUSCRIPT
+chmod +x /usr/local/bin/covenant-cpu-governor-setup.sh
+
+cat > /etc/systemd/system/covenant-cpu-governor-setup.service << 'CPUSVC'
+[Unit]
+Description=Covenant CachyOS - CPU Governor (performance via cpupower)
+After=multi-user.target
+Before=display-manager.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/covenant-cpu-governor-setup.sh
+RemainAfterExit=yes
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+CPUSVC
+
+# acpi_cpufreq deve ser carregado antes do udev
+echo "acpi_cpufreq" > /etc/modules-load.d/acpi_cpufreq.conf
+
+# udev hotplug fallback
+cat > /etc/udev/rules.d/50-cpu-governor.rules << 'CPUUDEV'
+SUBSYSTEM=="cpu", ACTION=="add", TEST=="cpufreq/scaling_governor", ATTR{cpufreq/scaling_governor}="performance"
+CPUUDEV
+
+if ! $IN_CHROOT; then
+    systemctl enable --now covenant-cpu-governor-setup.service 2>/dev/null || true
+else
+    systemctl enable covenant-cpu-governor-setup.service 2>/dev/null || true
+fi
+_log_ok "CPU governor service."
+
 # --- 23. covenant-check.sh ---
 _log_step "23/23 — covenant-check.sh..."
 cat > /usr/local/bin/covenant-check.sh << 'CHECKSCRIPT'
@@ -2159,6 +2159,7 @@ echo ""
 
 timer_start=$(get_timer)
 run_build "${build_list_iso}"
+
 
 
 
