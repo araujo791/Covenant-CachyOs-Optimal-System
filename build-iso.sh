@@ -1922,6 +1922,9 @@ if ! grep -q 'covenant-post-install' "${PROFILEDEF}" 2>/dev/null; then
     sed -i '/^)$/i\  ["/usr/local/bin/covenant-check.sh"]="0:0:755"' "${PROFILEDEF}" 2>/dev/null || true
     sed -i '/^)$/i\  ["/usr/local/bin/covenant-gpu-performance.sh"]="0:0:755"' "${PROFILEDEF}" 2>/dev/null || true
     sed -i '/^)$/i\  ["/usr/local/bin/covenant-irq-affinity.sh"]="0:0:755"' "${PROFILEDEF}" 2>/dev/null || true
+    sed -i '/^)$/i\  ["/usr/local/bin/covenant-target-setup"]="0:0:755"' "${PROFILEDEF}" 2>/dev/null || true
+    sed -i '/^)$/i\  ["/etc/calamares/scripts/covenant-calamares-setup.sh"]="0:0:755"' "${PROFILEDEF}" 2>/dev/null || true
+    sed -i '/^)$/i\  ["/etc/pacman.d/hooks/99-covenant-calamares-post.hook"]="0:0:644"' "${PROFILEDEF}" 2>/dev/null || true
     _log_ok "Permissões adicionadas ao profiledef.sh."
 else
     _log_ok "Permissões já existem no profiledef.sh."
@@ -2098,6 +2101,7 @@ echo ""
 
 timer_start=$(get_timer)
 run_build "${build_list_iso}"
+
 
 
 
