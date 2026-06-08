@@ -1074,8 +1074,10 @@ cat > /usr/local/bin/covenant-gpu-performance.sh << 'GPUSCRIPT'
 # Covenant — AMD RX 560: força performance level máximo
 sleep 5  # espera GPU estar pronta
 
-GPU_PATH="/sys/class/drm/card0/device"
-if [[ -f "${GPU_PATH}/power_dpm_force_performance_level" ]]; then
+GPU_PATH=$(for card in /sys/class/drm/card*/device; do
+    [[ -f "$card/power_dpm_force_performance_level" ]] && echo "$card" && break
+done)
+if [[ -n "${GPU_PATH}" ]]; then
     echo "manual" > "${GPU_PATH}/power_dpm_force_performance_level"
     # Força clock máximo (último índice disponível)
     SCLK_MAX=$(cat "${GPU_PATH}/pp_dpm_sclk" 2>/dev/null | tail -1 | awk '{print $1}' | tr -d ':')
@@ -1132,8 +1134,11 @@ printf "%-30s %s\n" "CPU Governor (cpu0):" "$(cat /sys/devices/system/cpu/cpu0/c
 printf "%-30s %s\n" "NVMe Scheduler:" "$(cat /sys/block/nvme0n1/queue/scheduler 2>/dev/null || echo 'n/a')"
 printf "%-30s %s\n" "zram:" "$(zramctl --noheadings -o NAME,DISKSIZE,ALGORITHM 2>/dev/null || echo 'n/a')"
 printf "%-30s %s\n" "Huge Pages:" "$(sysctl -n vm.nr_hugepages 2>/dev/null) x 2MB"
-printf "%-30s %s\n" "Mitigations:" "$(cat /sys/devices/system/cpu/vulnerabilities/spectre_v2 2>/dev/null | head -c50)"
-printf "%-30s %s\n" "GPU DPM Level:" "$(cat /sys/class/drm/card0/device/power_dpm_force_performance_level 2>/dev/null || echo 'n/a')"
+MIT=$(cat /sys/devices/system/cpu/vulnerabilities/spectre_v2 2>/dev/null || echo "n/a")
+[[ "$MIT" == *"Vulnerable"* ]] && MIT_OUT="OFF (intencional — mitigations=off)" || MIT_OUT="${MIT:0:60}"
+printf "%-30s %s\n" "Mitigations:" "$MIT_OUT"
+GPU_CARD=$(for card in /sys/class/drm/card*/device; do [[ -f "$card/power_dpm_force_performance_level" ]] && echo "$card" && break; done)
+printf "%-30s %s\n" "GPU DPM Level:" "$(cat "${GPU_CARD}/power_dpm_force_performance_level" 2>/dev/null || echo 'n/a')"
 printf "%-30s %s\n" "earlyoom:" "$(systemctl is-active earlyoom 2>/dev/null)"
 printf "%-30s %s\n" "irqbalance:" "$(systemctl is-active irqbalance 2>/dev/null)"
 printf "%-30s %s\n" "ananicy-cpp:" "$(systemctl is-active ananicy-cpp 2>/dev/null)"
@@ -1692,8 +1697,10 @@ _log_step "22/23 — GPU performance mode..."
 cat > /usr/local/bin/covenant-gpu-performance.sh << 'GPUSCRIPT'
 #!/bin/bash
 sleep 5
-GPU_PATH="/sys/class/drm/card0/device"
-if [[ -f "${GPU_PATH}/power_dpm_force_performance_level" ]]; then
+GPU_PATH=$(for card in /sys/class/drm/card*/device; do
+    [[ -f "$card/power_dpm_force_performance_level" ]] && echo "$card" && break
+done)
+if [[ -n "${GPU_PATH}" ]]; then
     echo "manual" > "${GPU_PATH}/power_dpm_force_performance_level"
     SCLK_MAX=$(cat "${GPU_PATH}/pp_dpm_sclk" 2>/dev/null | tail -1 | awk '{print $1}' | tr -d ':')
     MCLK_MAX=$(cat "${GPU_PATH}/pp_dpm_mclk" 2>/dev/null | tail -1 | awk '{print $1}' | tr -d ':')
@@ -1739,8 +1746,11 @@ printf "%-30s %s\n" "CPU Governor (cpu0):" "$(cat /sys/devices/system/cpu/cpu0/c
 printf "%-30s %s\n" "NVMe Scheduler:" "$(cat /sys/block/nvme0n1/queue/scheduler 2>/dev/null || echo 'n/a')"
 printf "%-30s %s\n" "zram:" "$(zramctl --noheadings -o NAME,DISKSIZE,ALGORITHM 2>/dev/null || echo 'n/a')"
 printf "%-30s %s\n" "Huge Pages:" "$(sysctl -n vm.nr_hugepages 2>/dev/null) x 2MB"
-printf "%-30s %s\n" "Mitigations:" "$(cat /sys/devices/system/cpu/vulnerabilities/spectre_v2 2>/dev/null | head -c60)"
-printf "%-30s %s\n" "GPU DPM Level:" "$(cat /sys/class/drm/card0/device/power_dpm_force_performance_level 2>/dev/null || echo 'n/a')"
+MIT=$(cat /sys/devices/system/cpu/vulnerabilities/spectre_v2 2>/dev/null || echo "n/a")
+[[ "$MIT" == *"Vulnerable"* ]] && MIT_OUT="OFF (intencional — mitigations=off)" || MIT_OUT="${MIT:0:60}"
+printf "%-30s %s\n" "Mitigations:" "$MIT_OUT"
+GPU_CARD=$(for card in /sys/class/drm/card*/device; do [[ -f "$card/power_dpm_force_performance_level" ]] && echo "$card" && break; done)
+printf "%-30s %s\n" "GPU DPM Level:" "$(cat "${GPU_CARD}/power_dpm_force_performance_level" 2>/dev/null || echo 'n/a')"
 printf "%-30s %s\n" "earlyoom:" "$(systemctl is-active earlyoom 2>/dev/null)"
 printf "%-30s %s\n" "irqbalance:" "$(systemctl is-active irqbalance 2>/dev/null)"
 printf "%-30s %s\n" "ananicy-cpp:" "$(systemctl is-active ananicy-cpp 2>/dev/null)"
@@ -2149,6 +2159,7 @@ echo ""
 
 timer_start=$(get_timer)
 run_build "${build_list_iso}"
+
 
 
 
