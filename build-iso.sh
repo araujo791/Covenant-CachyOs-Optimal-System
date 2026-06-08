@@ -784,41 +784,33 @@ mkdir -p /etc/systemd/system /usr/local/bin /etc/udev/rules.d
 
 cat > /usr/local/bin/covenant-cpu-governor-setup.sh << 'CPUSCRIPT'
 #!/bin/bash
+# Covenant — CPU governor setup via cpupower
+# Funciona com acpi-cpufreq (E5-2680v4 não usa intel_pstate)
 set -euo pipefail
-CPU_COUNT=$(nproc 2>/dev/null \
-    || ls -d /sys/devices/system/cpu/cpu[0-9]* 2>/dev/null | wc -l \
-    || echo 4)
 
-mkdir -p /etc/tmpfiles.d
-{
-    echo "# Covenant — cpu governor: performance"
-    echo "# Gerado no primeiro boot para ${CPU_COUNT} cores"
-    for i in $(seq 0 $(( CPU_COUNT - 1 ))); do
-        printf 'w! /sys/devices/system/cpu/cpu%d/cpufreq/scaling_governor - - - - performance\n' "$i"
+cpupower frequency-set -g performance 2>/dev/null || {
+    # fallback: escrever direto no sysfs
+    for gov in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do
+        echo "performance" > "$gov" 2>/dev/null || true
     done
-} > /etc/tmpfiles.d/cpu-governor.conf
-
-systemd-tmpfiles --create /etc/tmpfiles.d/cpu-governor.conf 2>/dev/null || true
+}
 
 CURRENT=$(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor 2>/dev/null || echo "n/a")
-echo "covenant-cpu-governor: ${CPU_COUNT} cores — governor: ${CURRENT}"
-
-systemctl disable covenant-cpu-governor-setup.service 2>/dev/null || true
+echo "covenant-cpu-governor: governor=${CURRENT}"
 CPUSCRIPT
 
 chmod +x /usr/local/bin/covenant-cpu-governor-setup.sh
 
 cat > /etc/systemd/system/covenant-cpu-governor-setup.service << 'CPUSVC'
 [Unit]
-Description=Covenant CachyOS - CPU Governor Setup (primeiro boot)
-After=systemd-tmpfiles-setup.service
+Description=Covenant CachyOS - CPU Governor (performance via cpupower)
+After=multi-user.target
 Before=display-manager.service
-ConditionPathExists=!/etc/tmpfiles.d/cpu-governor.conf
 
 [Service]
 Type=oneshot
 ExecStart=/usr/local/bin/covenant-cpu-governor-setup.sh
-RemainAfterExit=no
+RemainAfterExit=yes
 StandardOutput=journal
 StandardError=journal
 
@@ -907,8 +899,8 @@ fi
 #       b) /etc/kernel/cmdline.d/covenant.conf        → systemd-boot / UKI
 #
 #     Parâmetros:
-#       intel_pstate=disable      → usa intel_cpufreq para governor funcionar
-#       cpufreq.default_governor=performance → governor desde o boot
+#       (intel_pstate não necessário: E5-2680v4 usa acpi-cpufreq por padrão)
+#       (governor definido via covenant-cpu-governor-setup.service com cpupower)
 #       nvme_core.default_ps_max_latency_us=0 → sem power saving no NVMe (default_ps_state removido em kernels recentes)
 #       intel_idle.max_cstate=1              → complementa processor.max_cstate=1
 #       nvme_core.io_timeout=4294967295      → timeout máximo p/ cargas pesadas
@@ -927,7 +919,7 @@ fi
 # ---------------------------------------------------------------------------
 echo "  -> Configurando kernel cmdline de performance..."
 
-COVENANT_CMDLINE="intel_pstate=disable cpufreq.default_governor=performance nvme_core.default_ps_max_latency_us=0 nvme_core.io_timeout=4294967295 mitigations=off nowatchdog nmi_watchdog=0 skew_tick=1 transparent_hugepage=madvise amdgpu.ppfeaturemask=0xffffffff pcie_aspm=off split_lock_detect=off processor.max_cstate=1 intel_idle.max_cstate=1 quiet loglevel=3"
+COVENANT_CMDLINE="nvme_core.default_ps_max_latency_us=0 nvme_core.io_timeout=4294967295 mitigations=off nowatchdog nmi_watchdog=0 skew_tick=1 transparent_hugepage=madvise amdgpu.ppfeaturemask=0xffffffff pcie_aspm=off split_lock_detect=off processor.max_cstate=1 intel_idle.max_cstate=1 quiet loglevel=3"
 
 # --- a) GRUB ---
 mkdir -p /etc/default/grub.d
@@ -1178,7 +1170,7 @@ echo "    - CPU governor: performance (primeiro boot + udev)"
 echo "    - Limites: nofile=1M, nproc=131K, memlock=unlimited, audio rtprio=99"
 echo "    - /tmp: tmpfs 16GB via systemd (sobrevive Calamares)"
 echo "    - pacman: downloads paralelos=10"
-echo "    - Kernel: intel_pstate=disable, mitigations=off, max_cstate=1, THP=madvise, AMDGPU overdrive, pcie_aspm=off"
+echo "    - Kernel: mitigations=off, max_cstate=1, THP=madvise, AMDGPU overdrive, pcie_aspm=off"
 echo "    - Módulos: blacklist nouveau/bluetooth/pcspkr, AMDGPU tuning"
 echo "    - Coredumps: desabilitados"
 echo "    - profile-sync-daemon: browser em RAM (overlayfs)"
@@ -1587,7 +1579,7 @@ _log_ok "pacman."
 
 # --- 16. Kernel cmdline ---
 _log_step "17/23 — Kernel cmdline..."
-COV_CMD="intel_pstate=disable cpufreq.default_governor=performance nvme_core.default_ps_max_latency_us=0 nvme_core.io_timeout=4294967295 mitigations=off nowatchdog nmi_watchdog=0 skew_tick=1 transparent_hugepage=madvise amdgpu.ppfeaturemask=0xffffffff pcie_aspm=off split_lock_detect=off processor.max_cstate=1 intel_idle.max_cstate=1 quiet loglevel=3"
+COV_CMD="nvme_core.default_ps_max_latency_us=0 nvme_core.io_timeout=4294967295 mitigations=off nowatchdog nmi_watchdog=0 skew_tick=1 transparent_hugepage=madvise amdgpu.ppfeaturemask=0xffffffff pcie_aspm=off split_lock_detect=off processor.max_cstate=1 intel_idle.max_cstate=1 quiet loglevel=3"
 mkdir -p /etc/default/grub.d
 printf '# Covenant CachyOS\nGRUB_CMDLINE_LINUX_DEFAULT="%s"\n' "$COV_CMD" > /etc/default/grub.d/covenant-cmdline.cfg
 mkdir -p /etc/kernel/cmdline.d
@@ -2157,6 +2149,7 @@ echo ""
 
 timer_start=$(get_timer)
 run_build "${build_list_iso}"
+
 
 
 
