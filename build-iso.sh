@@ -1825,28 +1825,66 @@ _log_step "Configurando Calamares para pós-instalação Covenant..."
 CALAMARES_ETC="${ARCHISO}/airootfs/etc/calamares"
 mkdir -p "${CALAMARES_ETC}/modules"
 
-cat > "${CALAMARES_ETC}/modules/shellprocess.conf" << 'CALEOF'
----
-dontChroot: false
-timeout: 3600
-script:
-    - "-rm /etc/systemd/system/etc-pacman.d-gnupg.mount"
-    - "-rm /etc/systemd/system/display-manager.service"
-    - command: "/usr/local/bin/dmcheck"
-    - "-rm /usr/local/bin/dmcheck"
-    - "-rm -rf /home/liveuser"
-    - '-runuser ${USER} -c "cp -rf /etc/skel/. /home/${USER}/."'
-    - '-runuser ${USER} -c "rm -rf /home/${USER}/{.xsession,.xprofile,.xinitrc}"'
-    - command: "/etc/calamares/scripts/shell-setup ${USER}"
-      verbose: true
-    - '-rm /etc/calamares/scripts/shell-setup'
-    - command: "/etc/calamares/scripts/bootloader-post-setup"
-    - "-rm /etc/calamares/scripts/bootloader-post-setup"
-    - command: "/usr/local/bin/covenant-post-install.sh && touch /var/lib/covenant-setup-done"
-      timeout: 600
-CALEOF
+# Criar script de injeção: roda no live (dontChroot:true) via shellprocess-before-online,
+# copia o covenant-post-install.sh para o target via ${ROOT} após o pacstrap.
+# O shellprocess-before-online.conf tem dontChroot:true — acessa o target via ${ROOT}.
+# Criamos um conf extra que patcha o shellprocess.conf DENTRO do target após instalação.
 
-_log_ok "shellprocess.conf sobrescrito com covenant-post-install.sh."
+cat > "${CALAMARES_ETC}/modules/shellprocess-before-online.conf" << 'BEFOREEOF'
+---
+dontChroot: true
+timeout: 120
+script:
+    - command: "/etc/calamares/scripts/covenant-inject.sh"
+      verbose: true
+BEFOREEOF
+
+# Script que copia o post-install para o target antes do pacstrap terminar
+# Na verdade precisa rodar APÓS o pacstrap — usar shellprocess (dontChroot:false)
+# mas sem criar o arquivo antes do pacman instalar o cachyos-calamares-next.
+# Solução: criar /etc/calamares/modules/shellprocess.conf via covenant-inject.sh
+# que roda no target APÓS o cachyos-calamares-next ser instalado.
+# O shellprocess genérico no settings_online.conf roda DEPOIS de packages@online.
+
+mkdir -p "${CALAMARES_ETC}/scripts"
+cat > "${CALAMARES_ETC}/scripts/covenant-inject.sh" << 'INJECTEOF'
+#!/bin/bash
+# Roda no live com dontChroot:true — ROOT aponta para o target montado
+TARGET="${ROOT}"
+
+# 1. Copiar covenant-post-install.sh para o target
+mkdir -p "${TARGET}/usr/local/bin"
+cp /usr/local/bin/covenant-post-install.sh "${TARGET}/usr/local/bin/covenant-post-install.sh"
+chmod +x "${TARGET}/usr/local/bin/covenant-post-install.sh"
+
+# 2. Criar shellprocess.conf no target usando printf (evita heredoc aninhado)
+mkdir -p "${TARGET}/etc/calamares/modules"
+printf '%s\n' \
+    '---' \
+    'dontChroot: false' \
+    'timeout: 3600' \
+    'script:' \
+    '    - "-rm /etc/systemd/system/etc-pacman.d-gnupg.mount"' \
+    '    - "-rm /etc/systemd/system/display-manager.service"' \
+    '    - command: "/usr/local/bin/dmcheck"' \
+    '    - "-rm /usr/local/bin/dmcheck"' \
+    '    - "-rm -rf /home/liveuser"' \
+    '    - '\''-runuser ${USER} -c "cp -rf /etc/skel/. /home/${USER}/."'\''' \
+    '    - '\''-runuser ${USER} -c "rm -rf /home/${USER}/{.xsession,.xprofile,.xinitrc}"'\''' \
+    '    - command: "/etc/calamares/scripts/shell-setup ${USER}"' \
+    '      verbose: true' \
+    '    - '\''-rm /etc/calamares/scripts/shell-setup'\''' \
+    '    - command: "/etc/calamares/scripts/bootloader-post-setup"' \
+    '    - '\''-rm /etc/calamares/scripts/bootloader-post-setup'\''' \
+    '    - command: "/usr/local/bin/covenant-post-install.sh && touch /var/lib/covenant-setup-done"' \
+    '      timeout: 600' \
+    > "${TARGET}/etc/calamares/modules/shellprocess.conf"
+
+echo "Covenant: shellprocess.conf e post-install.sh injetados no target."
+INJECTEOF
+chmod +x "${CALAMARES_ETC}/scripts/covenant-inject.sh"
+
+_log_ok "covenant-inject.sh criado — injetará post-install no target via shellprocess-before-online."
 
 # ---------------------------------------------------------------------------
 # Atualizar file_permissions no profiledef.sh
@@ -2035,6 +2073,7 @@ echo ""
 
 timer_start=$(get_timer)
 run_build "${build_list_iso}"
+
 
 
 
