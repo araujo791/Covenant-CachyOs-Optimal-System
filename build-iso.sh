@@ -1850,7 +1850,7 @@ Target = cachyos-calamares-next
 [Action]
 Description = Covenant: configurando Calamares para pós-instalação...
 When = PostTransaction
-Exec = /bin/sh -c '/etc/calamares/scripts/covenant-calamares-setup.sh'
+Exec = /bin/bash /etc/calamares/scripts/covenant-calamares-setup.sh
 HOOKEOF
 
 # Script que recria shellprocess-before-online.conf com covenant-target-setup
@@ -1866,7 +1866,7 @@ timeout: 30
 script:
     - command: "cp /etc/pacman.conf ${ROOT}/etc/pacman.conf"
     - command: "/etc/calamares/scripts/detect-architecture ${ROOT}/etc/pacman.conf"
-    - command: "/usr/local/bin/covenant-target-setup ${ROOT}"
+    - command: "bash /usr/local/bin/covenant-target-setup ${ROOT}"
       timeout: 30
 CONFEOF
 echo "Covenant: shellprocess-before-online.conf reconfigurado."
@@ -2101,6 +2101,7 @@ echo ""
 
 timer_start=$(get_timer)
 run_build "${build_list_iso}"
+
 
 
 
