@@ -1218,10 +1218,12 @@ if systemd-detect-virt --chroot 2>/dev/null; then
     IN_CHROOT=true
 fi
 
-# Função helper: enable (+ start se não estiver em chroot)
+# Função helper: enable (+ start se não estiver em chroot nem em serviço systemd)
 _svc_enable() {
     local svc="$1"
-    if $IN_CHROOT; then
+    # Não usar --now se: (1) em chroot, ou (2) rodando dentro de um serviço systemd
+    # (evita deadlock quando first-boot.service tenta iniciar outros serviços)
+    if $IN_CHROOT || [[ -n "${INVOCATION_ID:-}" ]]; then
         systemctl enable "${svc}" 2>/dev/null || true
     else
         systemctl enable --now "${svc}" 2>/dev/null || true
@@ -1742,7 +1744,10 @@ SUBSYSTEM=="cpu", ACTION=="add", TEST=="cpufreq/scaling_governor", ATTR{cpufreq/
 CPUUDEV
 
 if ! $IN_CHROOT; then
-    systemctl enable --now covenant-cpu-governor-setup.service 2>/dev/null || true
+    # Usar enable sem --now para evitar deadlock dentro do first-boot.service
+    systemctl enable covenant-cpu-governor-setup.service 2>/dev/null || true
+    # Iniciar só se não estiver dentro de um serviço systemd
+    [[ -z "${INVOCATION_ID:-}" ]] && systemctl start covenant-cpu-governor-setup.service 2>/dev/null || true
 else
     systemctl enable covenant-cpu-governor-setup.service 2>/dev/null || true
 fi
@@ -2118,6 +2123,7 @@ if [[ -d "${AIROOTFS_WORK}/etc/calamares" ]]; then
 else
     _log_warn "airootfs de build não encontrado em ${AIROOTFS_WORK} — setup não aplicado."
 fi
+
 
 
 
