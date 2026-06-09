@@ -64,6 +64,10 @@ inetutils
 intel-ucode
 inxi
 irqbalance
+cpupower
+ananicy-cpp
+profile-sync-daemon
+earlyoom
 jfsutils
 kate
 kcalc
@@ -170,4 +174,5 @@ xdg-user-dirs-gtk
 xdg-utils
 xfsprogs
 zram-generator
+
 
