@@ -1246,13 +1246,21 @@ echo "============================================================"
 # --- Instalar pacotes necessários ---
 _log_step "1/23 — Pacotes de performance..."
 PERF_PKGS=(irqbalance zram-generator ananicy-cpp earlyoom ccache
-           profile-sync-daemon thermald cpupower)
+           profile-sync-daemon thermald cpupower vulkan-radeon
+           libva-mesa-driver mesa-vdpau)
 missing=()
 for pkg in "${PERF_PKGS[@]}"; do
     pacman -Qi "$pkg" &>/dev/null || missing+=("$pkg")
 done
 if [[ ${#missing[@]} -gt 0 ]]; then
-    pacman -Sy --needed --noconfirm "${missing[@]}" 2>/dev/null || _log_warn "Alguns pacotes indisponíveis."
+    _log_step "  Instalando: ${missing[*]}"
+    # Aguardar rede (até 30s)
+    for i in $(seq 1 6); do
+        ping -c1 -W3 archlinux.org &>/dev/null && break
+        _log_warn "  Aguardando rede... ($i/6)"
+        sleep 5
+    done
+    pacman -Sy --needed --noconfirm "${missing[@]}"         || _log_warn "Alguns pacotes indisponíveis — tente: sudo pacman -S ${missing[*]}"
 fi
 _log_ok "Pacotes verificados."
 
@@ -2105,6 +2113,7 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+
 
 
 
