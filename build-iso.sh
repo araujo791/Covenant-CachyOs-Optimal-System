@@ -1964,36 +1964,7 @@ fi
 # ---------------------------------------------------------------------------
 _log_ok "mkinitcpio.conf — mantendo configuração original do archiso."
 
-# ---------------------------------------------------------------------------
-# Patch util-iso.sh — corrige mv hardcoded "cachyos-DATE.iso"
-# O mkarchiso gera a ISO com o nome do profiledef (ISO_NAME_SAFE), mas
-# util-iso.sh tenta mv de "cachyos-..." → falha. Corrigimos aqui.
-# ---------------------------------------------------------------------------
-_log_step "Verificando patch do util-iso.sh..."
-[[ -r "${UTIL_ISO}" ]] || _log_fail "util-iso.sh não encontrado."
-
-# Busca 'cachyos-$(date' no arquivo (sem aspas — está no meio de uma string)
-if grep -qF 'cachyos-$(date' "${UTIL_ISO}"; then
-    cp "${UTIL_ISO}" "${UTIL_ISO}.bak"
-    sed -i 's|cachyos-$(date|'"${ISO_NAME_SAFE}"'-$(date|g' "${UTIL_ISO}"
-    if grep -qF "${ISO_NAME_SAFE}-\$(date" "${UTIL_ISO}" || grep -qF "${ISO_NAME_SAFE}-\$(date" "${UTIL_ISO}"; then
-        _log_ok "util-iso.sh corrigido: mv usa '${ISO_NAME_SAFE}-'."
-    else
-        # Verifica de outra forma (o sed pode ter funcionado com formato diferente)
-        if grep -qF "${ISO_NAME_SAFE}" "${UTIL_ISO}"; then
-            _log_ok "util-iso.sh corrigido: mv usa '${ISO_NAME_SAFE}-'."
-        else
-            cp "${UTIL_ISO}.bak" "${UTIL_ISO}"
-            _log_warn "Patch falhou — restaurado original."
-        fi
-    fi
-else
-    if grep -qF "${ISO_NAME_SAFE}" "${UTIL_ISO}"; then
-        _log_ok "util-iso.sh já usa '${ISO_NAME_SAFE}' — patch não necessário."
-    else
-        _log_warn "util-iso.sh: padrão 'cachyos-\$(date' não encontrado — mv pode falhar (cosmético)."
-    fi
-fi
+# util-iso.sh patch removido — buildiso.sh cuida do mv da ISO
 
 # ---------------------------------------------------------------------------
 # IMPORTANTE: desligar modo estrito antes de entregar o controle ao código
@@ -2024,6 +1995,7 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+
 
 
 
