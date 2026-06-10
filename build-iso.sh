@@ -1914,6 +1914,33 @@ _log_ok "Calamares configurado com covenant-target-setup."
 # (roda após o pacman instalar cachyos-calamares-next no airootfs de build)
 
 # ---------------------------------------------------------------------------
+# Wallpapers customizados
+# Imagens em wallpapers/ do repo são copiadas para o airootfs junto com as
+# wallpapers padrão do CachyOS em /usr/share/wallpapers/cachyos-wallpapers/
+# ---------------------------------------------------------------------------
+WALLPAPERS_SRC="${SCRIPT_DIR}/wallpapers"
+WALLPAPERS_DST="${ARCHISO}/airootfs/usr/share/wallpapers/cachyos-wallpapers"
+
+if [[ -d "${WALLPAPERS_SRC}" ]]; then
+    _log_step "Copiando wallpapers customizados..."
+    mkdir -p "${WALLPAPERS_DST}"
+    count=0
+    for img in "${WALLPAPERS_SRC}"/*.{png,jpg,jpeg,webp}; do
+        [[ -f "$img" ]] || continue
+        cp "$img" "${WALLPAPERS_DST}/"
+        _log_ok "  $(basename "$img")"
+        ((count++))
+    done
+    if [[ $count -eq 0 ]]; then
+        _log_warn "Nenhuma imagem encontrada em wallpapers/ — pasta existe mas está vazia."
+    else
+        _log_ok "${count} wallpaper(s) copiado(s) para o airootfs."
+    fi
+else
+    _log_warn "Pasta wallpapers/ não encontrada — pulando wallpapers customizados."
+fi
+
+# ---------------------------------------------------------------------------
 # Atualizar file_permissions no profiledef.sh
 # ---------------------------------------------------------------------------
 _log_step "Atualizando permissões no profiledef.sh..."
@@ -2116,6 +2143,7 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+
 
 
 
