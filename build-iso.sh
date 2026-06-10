@@ -2127,22 +2127,31 @@ echo "    Gaming apps : instalar pós-setup"
 echo "    ================================================"
 echo ""
 
+# Chamar buildiso.sh do CachyOS diretamente
+# O trap EXIT do buildiso.sh retorna código 1 mesmo em sucesso — ignoramos isso
 timer_start=$(get_timer)
-run_build "${build_list_iso}"
 
-# Pós-build: aplicar covenant-calamares-setup no airootfs montado
-AIROOTFS_WORK="${work_dir}/x86_64/airootfs"
-if [[ -d "${AIROOTFS_WORK}/etc/calamares" ]]; then
-    _log_step "Pós-build: aplicando covenant-calamares-setup no airootfs..."
-    cp "${ARCHISO}/airootfs/etc/calamares/scripts/covenant-calamares-setup.sh"        "${AIROOTFS_WORK}/etc/calamares/scripts/covenant-calamares-setup.sh" 2>/dev/null || true
-    cp "${ARCHISO}/airootfs/usr/local/bin/covenant-target-setup"        "${AIROOTFS_WORK}/usr/local/bin/covenant-target-setup" 2>/dev/null || true
-    arch-chroot "${AIROOTFS_WORK}" bash /etc/calamares/scripts/covenant-calamares-setup.sh
-    _log_ok "shellprocess-before-online.conf atualizado no airootfs de build."
+# Copiar scripts de pós-build para o repo antes de chamar buildiso.sh
+# O pós-build (arch-chroot) será feito após a ISO ser gerada
+_log_step "Chamando buildiso.sh do CachyOS..."
+cd "${REPO_DIR}"
+if [[ "${build_in_ram}" == "true" ]]; then
+    bash buildiso.sh -r -p "${build_list_iso}" || true
 else
-    _log_warn "airootfs de build não encontrado em ${AIROOTFS_WORK} — setup não aplicado."
+    bash buildiso.sh -p "${build_list_iso}" || true
+fi
+cd "${SCRIPT_DIR}"
+
+# Verificar se a ISO foi gerada
+ISO_FILE=$(find "${REPO_DIR}/out" -name "*.iso" -newer "${REPO_DIR}/buildiso.sh" 2>/dev/null | head -1)
+if [[ -f "${ISO_FILE}" ]]; then
+    _log_ok "ISO gerada: ${ISO_FILE}"
+else
+    _log_fail "ISO não encontrada em ${REPO_DIR}/out/ — build falhou."
 fi
 
 # ---------------------------------------------------------------------------
+
 
 
 
