@@ -2006,133 +2006,6 @@ fi
 # ---------------------------------------------------------------------------
 set +e +u +o pipefail
 
-# ---------------------------------------------------------------------------
-# Carregar utilitários do repositório
-# ---------------------------------------------------------------------------
-_log_step "Carregando utilitários..."
-src_dir="${REPO_DIR}"
-cd "${src_dir}" || _log_fail "Não foi possível acessar '${src_dir}'."
-
-if [[ -r "${src_dir}/util-msg.sh" ]]; then
-    source "${src_dir}/util-msg.sh"
-    _log_ok "util-msg.sh carregado."
-else
-    _log_warn "util-msg.sh não encontrado."
-fi
-
-[[ -r "${src_dir}/util.sh" ]] || _log_fail "util.sh não encontrado."
-source "${src_dir}/util.sh" || _log_fail "Falha ao carregar util.sh"
-_log_ok "util.sh carregado."
-
-# ---------------------------------------------------------------------------
-# Diretórios
-# ---------------------------------------------------------------------------
-work_dir="${src_dir}/build"
-outFolder="${src_dir}/out"
-
-_log_step "Diretórios:"
-echo "    Repositório : ${src_dir}"
-echo "    Build       : ${work_dir}"
-echo "    ISO saída   : ${outFolder}"
-
-# ---------------------------------------------------------------------------
-# Build em RAM — monta tmpfs real (não depende de /tmp ser tmpfs)
-# ---------------------------------------------------------------------------
-_log_step "Modo de build..."
-if [[ "$build_in_ram" == "true" ]]; then
-    local_ram_gb=$(awk '/MemTotal/{print int($2/1024/1024)}' /proc/meminfo)
-    if [[ $local_ram_gb -gt 23 ]]; then
-        work_dir="/tmp/cachyos-iso-build-$$"
-        mkdir -p "${work_dir}"
-        mount -t tmpfs -o "size=$((local_ram_gb - 8))G" tmpfs "${work_dir}" \
-            || _log_fail "Falha ao montar tmpfs em ${work_dir}"
-        _TMPFS_MOUNTED="${work_dir}"
-        _log_ok "Build em RAM (${local_ram_gb}GB, tmpfs montado): ${work_dir}"
-    else
-        _log_warn "RAM insuficiente (${local_ram_gb}GB). Usando disco."
-    fi
-else
-    _log_ok "Build em disco: ${work_dir}"
-    _log_warn "Dica: use -r para build em RAM (64GB disponíveis)."
-fi
-
-# ---------------------------------------------------------------------------
-# Limpar diretório de trabalho (se -c NÃO foi passado)
-# ---------------------------------------------------------------------------
-if [[ "$clean_first" == "true" ]]; then
-    _log_step "Limpando diretório de trabalho anterior..."
-    if [[ -d "${work_dir}" ]]; then
-        rm -rf "${work_dir:?}"/*
-        _log_ok "Diretório limpo."
-    else
-        _log_ok "Nada para limpar."
-    fi
-else
-    _log_ok "Limpeza de diretório pulada (-c)."
-fi
-
-# ---------------------------------------------------------------------------
-# Preparar diretório de trabalho
-# ---------------------------------------------------------------------------
-_log_step "Preparando diretório de trabalho..."
-prepare_dir "${work_dir}" || _log_fail "Falha ao preparar '${work_dir}'."
-_log_ok "Pronto: ${work_dir}"
-
-# ---------------------------------------------------------------------------
-# Carregar utilitários ISO
-# ---------------------------------------------------------------------------
-_log_step "Carregando utilitários ISO..."
-[[ -r "${src_dir}/util-iso.sh" ]] || _log_fail "util-iso.sh não encontrado."
-import "${src_dir}/util-iso.sh" || _log_fail "Falha ao carregar util-iso.sh"
-_log_ok "util-iso.sh carregado."
-
-[[ -r "${src_dir}/util-iso-mount.sh" ]] || _log_fail "util-iso-mount.sh não encontrado."
-import "${src_dir}/util-iso-mount.sh" || _log_fail "Falha ao carregar util-iso-mount.sh"
-_log_ok "util-iso-mount.sh carregado."
-
-# ---------------------------------------------------------------------------
-# Verificar requisitos
-# ---------------------------------------------------------------------------
-_log_step "Verificando requisitos do sistema..."
-check_requirements || _log_fail "Requisitos não atendidos."
-_log_ok "Requisitos OK."
-
-# ---------------------------------------------------------------------------
-# Traps (expansão corrigida — cada sinal recebe seu próprio valor)
-# ---------------------------------------------------------------------------
-_setup_trap() {
-    local sig="$1"
-    trap "trap_exit ${sig} \"$(gettext '%s signal caught. Exiting...')\" \"${sig}\"" "${sig}"
-}
-for sig in TERM HUP QUIT; do _setup_trap "$sig"; done
-trap 'trap_exit INT "$(gettext "Aborted by user! Exiting...")"' INT
-trap 'trap_exit USR1 "$(gettext "An unknown error has occurred. Exiting...")"' ERR
-
-# ---------------------------------------------------------------------------
-# Build!
-# ---------------------------------------------------------------------------
-_log_step "Iniciando build do perfil '${build_list_iso}'..."
-echo ""
-echo "    ================================================"
-echo "    ISO         : ${ISO_NAME_RAW}"
-echo "    Arquivo     : ${ISO_NAME_SAFE}-$(date +%Y.%m.%d)-x86_64.iso"
-echo "    Hardware    : Xeon E5-2680v4 + RX 560 + r8169"
-echo "    Performance : irqbalance, zram 1GB, ccache, thermald"
-echo "    Limpeza     : locales, docs, fontes CJK, ícones, cache"
-echo "    Otimizações : sysctl/BBR, ananicy-cpp, earlyoom,"
-echo "                  I/O scheduler, RADV/VA-API, CPU gov,"
-echo "                  makepkg native, DNS-over-TLS, /tmp RAM,"
-echo "                  IRQ affinity, coredump off, psd, modprobe"
-echo "    Gaming apps : instalar pós-setup"
-echo "    ================================================"
-echo ""
-
-# Chamar buildiso.sh do CachyOS diretamente
-# O trap EXIT do buildiso.sh retorna código 1 mesmo em sucesso — ignoramos isso
-timer_start=$(get_timer)
-
-# Copiar scripts de pós-build para o repo antes de chamar buildiso.sh
-# O pós-build (arch-chroot) será feito após a ISO ser gerada
 _log_step "Chamando buildiso.sh do CachyOS..."
 cd "${REPO_DIR}"
 if [[ "${build_in_ram}" == "true" ]]; then
@@ -2151,6 +2024,7 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+
 
 
 
