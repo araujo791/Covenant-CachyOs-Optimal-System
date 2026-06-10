@@ -1905,6 +1905,24 @@ WantedBy=multi-user.target
 '     > "${TARGET}/etc/systemd/system/covenant-first-boot.service"
 mkdir -p "${TARGET}/etc/systemd/system/multi-user.target.wants"
 ln -sf /etc/systemd/system/covenant-first-boot.service     "${TARGET}/etc/systemd/system/multi-user.target.wants/covenant-first-boot.service"
+
+# Copiar wallpapers customizados do live para o target
+LIVE_WP="/usr/share/wallpapers/cachyos-wallpapers"
+TARGET_WP="${TARGET}/usr/share/wallpapers/cachyos-wallpapers"
+if [[ -d "${LIVE_WP}" ]]; then
+    mkdir -p "${TARGET_WP}"
+    for img in "${LIVE_WP}"/*.{png,jpg,jpeg,webp}; do
+        [[ -f "$img" ]] || continue
+        # Copiar apenas wallpapers que não existem no target (os nossos customizados)
+        fname=$(basename "$img")
+        # Verificar se é um wallpaper customizado (não do CachyOS padrão)
+        if [[ "$fname" == Ram* ]] || [[ "$fname" == Covenant* ]] || [[ "$fname" == covenant* ]]; then
+            cp "$img" "${TARGET_WP}/$fname"
+            echo "Covenant: wallpaper copiado: $fname"
+        fi
+    done
+fi
+
 echo "Covenant: post-install.sh e first-boot.service instalados no target."
 TARGETEOF
 
@@ -1995,6 +2013,7 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+
 
 
 
