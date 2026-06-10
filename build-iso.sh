@@ -1929,7 +1929,7 @@ if [[ -d "${WALLPAPERS_SRC}" ]]; then
         [[ -f "$img" ]] || continue
         cp "$img" "${WALLPAPERS_DST}/"
         _log_ok "  $(basename "$img")"
-        ((count++))
+        count=$((count + 1))
     done
     if [[ $count -eq 0 ]]; then
         _log_warn "Nenhuma imagem encontrada em wallpapers/ — pasta existe mas está vazia."
@@ -1995,6 +1995,7 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+
 
 
 
