@@ -14,9 +14,7 @@ Covenant-CachyOs-Optimal-System/
 ├── post-install.sh           # Script de pós-instalação standalone
 ├── packages.x86_64           # Lista de pacotes customizada
 ├── packages_desktop.x86_64   # Pacotes KDE extras
-├── wallpapers/               # Wallpapers customizados (png, jpg, jpeg, webp)
-├── covenant-plymouth/        # Tema Plymouth Covenant
-└── covenant-plymouth.zip     # Tema Plymouth comprimido
+└── wallpapers/               # Wallpapers customizados (png, jpg, jpeg, webp)
 ```
 
 ---
