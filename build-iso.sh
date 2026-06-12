@@ -1375,13 +1375,33 @@ _log_step "6/23 — makepkg.conf..."
 MAKEPKG="/etc/makepkg.conf"
 if [[ -f "$MAKEPKG" ]]; then
     NPROC=$(nproc 2>/dev/null || echo 28)
-    sed -i 's/^CFLAGS=.*/CFLAGS="-march=native -mtune=native -O2 -pipe -fno-plt -fexceptions -Wp,-D_FORTIFY_SOURCE=3 -Wformat -Werror=format-security -fstack-clash-protection -fcf-protection"/' "$MAKEPKG" 2>/dev/null || true
-    sed -i 's/^CXXFLAGS=.*/CXXFLAGS="$CFLAGS -Wp,-D_GLIBCXX_ASSERTIONS"/' "$MAKEPKG" 2>/dev/null || true
-    sed -i 's/^RUSTFLAGS=.*/RUSTFLAGS="-C opt-level=3 -C target-cpu=native"/' "$MAKEPKG" 2>/dev/null || true
-    sed -i "s/^#\?MAKEFLAGS=.*/MAKEFLAGS=\"-j${NPROC}\"/" "$MAKEPKG" 2>/dev/null || true
-    sed -i "s/^COMPRESSZST=.*/COMPRESSZST=(zstd -c -T0 -19 -)/" "$MAKEPKG" 2>/dev/null || true
-    grep -q 'ccache' "$MAKEPKG" 2>/dev/null || \
-        sed -i 's|^BUILDENV=.*|BUILDENV=(!distcc color ccache check !sign)|' "$MAKEPKG" 2>/dev/null || true
+    # Usar python para editar makepkg.conf de forma segura (evita problemas com sed e aspas)
+    python3 - "$MAKEPKG" "$NPROC" << 'PYEOF'
+import sys, re
+
+makepkg_file = sys.argv[1]
+nproc = sys.argv[2]
+
+with open(makepkg_file, 'r') as f:
+    content = f.read()
+
+replacements = [
+    (r'^CFLAGS=.*', 'CFLAGS="-march=native -mtune=native -O2 -pipe -fno-plt -fexceptions -Wp,-D_FORTIFY_SOURCE=3 -Wformat -Werror=format-security -fstack-clash-protection -fcf-protection"'),
+    (r'^CXXFLAGS=.*', 'CXXFLAGS="$CFLAGS -Wp,-D_GLIBCXX_ASSERTIONS"'),
+    (r'^RUSTFLAGS=.*', 'RUSTFLAGS="-C opt-level=3 -C target-cpu=native"'),
+    (r'^#?MAKEFLAGS=.*', f'MAKEFLAGS="-j{nproc}"'),
+    (r'^COMPRESSZST=.*', 'COMPRESSZST=(zstd -c -T0 -19 -)'),
+    (r'^BUILDENV=.*', 'BUILDENV=(!distcc color ccache check !sign)'),
+]
+
+for pattern, replacement in replacements:
+    content = re.sub(pattern, replacement, content, flags=re.MULTILINE)
+
+with open(makepkg_file, 'w') as f:
+    f.write(content)
+
+print("makepkg.conf atualizado com sucesso.")
+PYEOF
 fi
 mkdir -p /etc/ccache.conf.d
 cat > /etc/ccache.conf << 'CCACHE'
@@ -2013,6 +2033,7 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+
 
 
 
