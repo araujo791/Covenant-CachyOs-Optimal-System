@@ -1376,7 +1376,8 @@ MAKEPKG="/etc/makepkg.conf"
 if [[ -f "$MAKEPKG" ]]; then
     # Usar python para editar makepkg.conf com flags modernas multi-linha
     # sed falha com aspas e continuações de linha
-    python3 << 'PYEOF2'
+    # Escrever script python em arquivo temp para evitar heredoc aninhado dentro do POSTINSTALL
+    cat > /tmp/_covenant_makepkg.py << 'MKPKG_PY'
 import re, subprocess
 
 makepkg = "/etc/makepkg.conf"
@@ -1428,7 +1429,8 @@ c = re.sub(r'^DEBUG_CXXFLAGS=.*', 'DEBUG_CXXFLAGS="$DEBUG_CFLAGS"', c, flags=re.
 with open(makepkg, "w") as f:
     f.write(c)
 print("makepkg.conf otimizado.")
-PYEOF2
+MKPKG_PY
+    python3 /tmp/_covenant_makepkg.py && rm -f /tmp/_covenant_makepkg.py
 fi
 mkdir -p /etc/ccache.conf.d
 cat > /etc/ccache.conf << 'CCACHE'
@@ -2060,6 +2062,7 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+
 
 
 
