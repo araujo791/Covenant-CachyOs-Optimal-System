@@ -1362,7 +1362,7 @@ if ! $IN_CHROOT; then
     for dev in /sys/block/nvme*; do
         [[ -d "$dev" ]] || continue
         echo "none" > "${dev}/queue/scheduler" 2>/dev/null || true
-        echo "2048" > "${dev}/queue/nr_requests" 2>/dev/null || true
+        echo "1024" > "${dev}/queue/nr_requests" 2>/dev/null || true
         echo "512"  > "${dev}/queue/read_ahead_kb" 2>/dev/null || true
         echo "0"    > "${dev}/queue/wbt_lat_usec" 2>/dev/null || true
         echo "2"    > "${dev}/queue/rq_affinity" 2>/dev/null || true
@@ -2062,6 +2062,7 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+
 
 
 
