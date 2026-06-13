@@ -2053,15 +2053,19 @@ else
 fi
 cd "${SCRIPT_DIR}"
 
-# Verificar se a ISO foi gerada
-ISO_FILE=$(find "${REPO_DIR}/out" -name "*.iso" -newer "${REPO_DIR}/buildiso.sh" 2>/dev/null | head -1)
+# Verificar se a ISO foi gerada — busca qualquer .iso na pasta out/
+ISO_FILE=$(find "${REPO_DIR}/out" -name "*.iso" 2>/dev/null | sort -t- -k3 -r | head -1)
 if [[ -f "${ISO_FILE}" ]]; then
-    _log_ok "ISO gerada: ${ISO_FILE}"
+    ISO_SIZE=$(du -sh "${ISO_FILE}" 2>/dev/null | cut -f1)
+    _log_ok "ISO gerada: ${ISO_FILE} (${ISO_SIZE})"
+    _log_ok "Copie para um pendrive com:"
+    _log_ok "  sudo dd if='${ISO_FILE}' of=/dev/sdX bs=4M status=progress oflag=sync"
 else
     _log_fail "ISO não encontrada em ${REPO_DIR}/out/ — build falhou."
 fi
 
 # ---------------------------------------------------------------------------
+
 
 
 
