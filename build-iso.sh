@@ -1374,34 +1374,61 @@ _log_ok "I/O scheduler."
 _log_step "6/23 — makepkg.conf..."
 MAKEPKG="/etc/makepkg.conf"
 if [[ -f "$MAKEPKG" ]]; then
-    NPROC=$(nproc 2>/dev/null || echo 28)
-    # Usar python para editar makepkg.conf de forma segura (evita problemas com sed e aspas)
-    python3 - "$MAKEPKG" "$NPROC" << 'PYEOF'
-import sys, re
+    # Usar python para editar makepkg.conf com flags modernas multi-linha
+    # sed falha com aspas e continuações de linha
+    python3 << 'PYEOF2'
+import re, subprocess
 
-makepkg_file = sys.argv[1]
-nproc = sys.argv[2]
+makepkg = "/etc/makepkg.conf"
+with open(makepkg) as f:
+    c = f.read()
 
-with open(makepkg_file, 'r') as f:
-    content = f.read()
+nproc = subprocess.check_output(["nproc"]).decode().strip()
 
-replacements = [
-    (r'^CFLAGS=.*', 'CFLAGS="-march=native -mtune=native -O2 -pipe -fno-plt -fexceptions -Wp,-D_FORTIFY_SOURCE=3 -Wformat -Werror=format-security -fstack-clash-protection -fcf-protection"'),
-    (r'^CXXFLAGS=.*', 'CXXFLAGS="$CFLAGS -Wp,-D_GLIBCXX_ASSERTIONS"'),
-    (r'^RUSTFLAGS=.*', 'RUSTFLAGS="-C opt-level=3 -C target-cpu=native"'),
-    (r'^#?MAKEFLAGS=.*', f'MAKEFLAGS="-j{nproc}"'),
-    (r'^COMPRESSZST=.*', 'COMPRESSZST=(zstd -c -T0 -19 -)'),
-    (r'^BUILDENV=.*', 'BUILDENV=(!distcc color ccache check !sign)'),
-]
+# Remover bloco antigo de compiler flags e inserir novo
+# Procura do inicio do bloco ate a linha BUILDENV ou DEBUG
+flags_block = """#-- Compiler and Linker Flags
+CPPFLAGS="-D_FORTIFY_SOURCE=3"
+CFLAGS="-march=native -mtune=native -O2 -pipe -fno-plt -fexceptions \
+        -fno-omit-frame-pointer -mno-omit-leaf-frame-pointer \
+        -fstack-clash-protection -fcf-protection \
+        -fstack-protector-strong \
+        -fstrict-flex-arrays=3 \
+        -Wformat -Werror=format-security"
+CXXFLAGS="$CFLAGS -D_GLIBCXX_ASSERTIONS"
+LDFLAGS="-Wl,-O1,--sort-common,--as-needed,-z,relro,-z,now \
+         -Wl,-z,pack-relative-relocs \
+         -Wl,--no-copy-dt-needed-entries \
+         -Wl,-z,nodlopen \
+         -Wl,-z,noexecstack"
+LTOFLAGS="-flto=auto"
+RUSTFLAGS="-C opt-level=3 -C target-cpu=native"
+"""
 
-for pattern, replacement in replacements:
-    content = re.sub(pattern, replacement, content, flags=re.MULTILINE)
+c = re.sub(
+    r'#-- Compiler and Linker Flags.*?(?=
+#--\s|
+BUILDENV|
+DEBUG_CFLAGS)',
+    flags_block,
+    c, flags=re.DOTALL
+)
 
-with open(makepkg_file, 'w') as f:
-    f.write(content)
+# MAKEFLAGS e NINJAFLAGS
+c = re.sub(r'^#?MAKEFLAGS=.*', f'MAKEFLAGS="-j{nproc}"', c, flags=re.MULTILINE)
+c = re.sub(r'^#?NINJAFLAGS=.*', f'NINJAFLAGS="-j{nproc}"', c, flags=re.MULTILINE)
+# COMPRESSZST
+c = re.sub(r'^COMPRESSZST=.*', 'COMPRESSZST=(zstd -c -T0 -19 -)', c, flags=re.MULTILINE)
+# BUILDENV com ccache
+c = re.sub(r'^BUILDENV=.*', 'BUILDENV=(!distcc color ccache check !sign)', c, flags=re.MULTILINE)
+# DEBUG limpo
+c = re.sub(r'^DEBUG_CFLAGS=.*', 'DEBUG_CFLAGS=""', c, flags=re.MULTILINE)
+c = re.sub(r'^DEBUG_CXXFLAGS=.*', 'DEBUG_CXXFLAGS="$DEBUG_CFLAGS"', c, flags=re.MULTILINE)
 
-print("makepkg.conf atualizado com sucesso.")
-PYEOF
+with open(makepkg, "w") as f:
+    f.write(c)
+print("makepkg.conf otimizado.")
+PYEOF2
 fi
 mkdir -p /etc/ccache.conf.d
 cat > /etc/ccache.conf << 'CCACHE'
