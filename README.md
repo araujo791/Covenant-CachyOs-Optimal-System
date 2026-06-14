@@ -1,6 +1,6 @@
 # Covenant CachyOS Optimal System
 
-**Branch: Covenant** — Versão aprimorada e mantida com otimizações agressivas de performance para hardware específico:
+**Branch: Covenant** — Versão aprimorada com otimizações agressivas de performance para hardware específico:
 - **CPU**: Xeon E5-2680v4 (14c/28t Broadwell)
 - **GPU**: AMD RX 560 Polaris
 - **RAM**: 64GB ECC
@@ -9,26 +9,27 @@
 ## Principais Otimizações
 
 - Kernel cmdline agressivo (`mitigations=off` mantido)
-- CPU Governor `performance` fixo + IRQ affinity
+- CPU Governor `performance` fixo + IRQ affinity otimizado
 - I/O Scheduler otimizado (NVMe=none, etc.)
 - Hugepages reservadas + zram zstd
 - makepkg com `-march=native -O2` + ccache
-- Rede: TCP BBR + buffers grandes + DoT
-- Remoção inteligente de pacotes (WiFi, NVIDIA, gaming pesado)
+- Rede: TCP BBR + buffers grandes + DNS-over-TLS
+- Remoção inteligente de pacotes
 - Serviços: earlyoom, ananicy-cpp, thermald, fstrim
+- Extra otimizações integradas automaticamente no post-install
 
 ## ⚠️ Aviso de Segurança Crítico
 
-**`mitigations=off`** está **mantido** conforme sua solicitação. Isso desabilita mitigações Spectre/Meltdown e outras proteções de CPU. Recomendado apenas para workstations isoladas/offline ou ambientes altamente controlados. Considere o risco de exploração.
+**`mitigations=off`** está **mantido**. Isso desabilita várias mitigações de CPU. Use apenas em ambientes controlados.
 
-## Melhorias Implementadas na Branch Covenant
+## Como Usar
 
-- README mais profissional e completo
-- Estrutura de logs e error handling reforçada
-- Comentários explicativos em pontos chave
-- Preparação para modularização futura do build-iso.sh
-- Versão atualizada do post-install.sh
+1. Clone a branch `Covenant`
+2. Execute `./build-iso.sh` para gerar a ISO customizada
+3. Instale a ISO gerada
+4. No primeiro boot, o `post-install.sh` é executado automaticamente e aplica **todas** as otimizações, incluindo as extras.
+5. Rode `covenant-check.sh` para verificar tudo.
 
-**Sempre trabalhe na branch `Covenant`**.
+Tudo é aplicado de forma automática e verificável.
 
 Para mais otimizações ou ajustes, me avise!
