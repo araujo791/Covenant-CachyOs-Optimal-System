@@ -31,5 +31,3 @@
 5. Rode `covenant-check.sh` para verificar tudo.
 
 Tudo é aplicado de forma automática e verificável.
-
-Para mais otimizações ou ajustes, me avise!
