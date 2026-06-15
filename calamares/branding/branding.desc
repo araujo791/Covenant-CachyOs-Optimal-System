@@ -1,0 +1,10 @@
+cat > calamares/branding/branding.desc << 'EOF'
+name: Covenant CachyOS
+version: 1.0
+short: Covenant CachyOS - Otimizado para Performance
+logo: images/logo-covenant.jpg
+installer_logo: images/logo-covenant.jpg
+background: images/performance-gains.jpg
+sidebar_background: images/performance-gains.jpg
+welcome: images/performance-gains.jpg
+EOF
